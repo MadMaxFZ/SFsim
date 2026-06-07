@@ -27,12 +27,12 @@ class DisplayManager:
     HUD overlaid on ORBITAL MAP.
     """
 
-    W, H          = 1920, 1080
-    MFD_W         = 240
-    TIMELINE_H    = 120
-    TELEMETRY_H   = 100
-    FPS           = 60
-    SIM_STEP_S    = 1.0        # simulation seconds advanced per real frame at warp x1
+    W, H = 1920, 1080
+    MFD_W = 240
+    TIMELINE_H = 120
+    TELEMETRY_H = 100
+    FPS = 60
+    SIM_STEP_S = 1.0  # simulation seconds advanced per real frame at warp x1
 
     def __init__(self, api):
         self.api = api
@@ -88,29 +88,29 @@ class DisplayManager:
             # --- draw ---
             self._screen.fill(Colors.BACKGROUND)
             self._screen.blit(
-                self._panels['map'].draw(),
-                (self.MFD_W, 0)
-            )
+                    self._panels['map'].draw(),
+                    (self.MFD_W, 0),
+                    )
             self._screen.blit(
-                self._panels['hud'].draw(),
-                (self.MFD_W, 0)
-            )
+                    self._panels['hud'].draw(),
+                    (self.MFD_W, 0),
+                    )
             self._screen.blit(
-                self._panels['left_mfd'].draw(),
-                (0, 0)
-            )
+                    self._panels['left_mfd'].draw(),
+                    (0, 0),
+                    )
             self._screen.blit(
-                self._panels['right_mfd'].draw(),
-                (self.W - self.MFD_W, 0)
-            )
+                    self._panels['right_mfd'].draw(),
+                    (self.W - self.MFD_W, 0),
+                    )
             self._screen.blit(
-                self._panels['telemetry'].draw(),
-                (self.MFD_W, self.H - self.TIMELINE_H - self.TELEMETRY_H)
-            )
+                    self._panels['telemetry'].draw(),
+                    (self.MFD_W, self.H - self.TIMELINE_H - self.TELEMETRY_H),
+                    )
             self._screen.blit(
-                self._panels['timeline'].draw(),
-                (0, self.H - self.TIMELINE_H)
-            )
+                    self._panels['timeline'].draw(),
+                    (0, self.H - self.TIMELINE_H),
+                    )
 
             pygame.display.flip()
 
@@ -123,47 +123,49 @@ class DisplayManager:
         main_h = self.H - self.TIMELINE_H - self.TELEMETRY_H
 
         self._panels['map'] = OrbitalMap(
-            pygame.Rect(0, 0, map_w, main_h)
-        )
+                pygame.Rect(0, 0, map_w, main_h),
+                )
         self._panels['hud'] = HUD(
-            pygame.Rect(0, 0, map_w, main_h)
-        )
+                pygame.Rect(0, 0, map_w, main_h),
+                )
         self._panels['left_mfd'] = MFD(
-            pygame.Rect(0, 0, self.MFD_W, self.H - self.TIMELINE_H),
-            side='left'
-        )
+                pygame.Rect(0, 0, self.MFD_W, self.H - self.TIMELINE_H),
+                side='left',
+                )
         self._panels['right_mfd'] = MFD(
-            pygame.Rect(0, 0, self.MFD_W, self.H - self.TIMELINE_H),
-            side='right'
-        )
+                pygame.Rect(0, 0, self.MFD_W, self.H - self.TIMELINE_H),
+                side='right',
+                )
         self._panels['telemetry'] = TelemetryPanel(
-            pygame.Rect(0, 0, map_w, self.TELEMETRY_H)
-        )
+                pygame.Rect(0, 0, map_w, self.TELEMETRY_H),
+                )
         self._panels['timeline'] = TimelineBar(
-            pygame.Rect(0, 0, self.W, self.TIMELINE_H),
-            api=self.api
-        )
+                pygame.Rect(0, 0, self.W, self.TIMELINE_H),
+                api=self.api,
+                )
 
-    def _dispatch_event(self, event: pygame.Event) -> None:
+    def _dispatch_event(self, event: pygame.event) -> None:
         """Route events to panels, offsetting mouse coords as needed."""
         self._panels['map'].handle_event(
-            self._offset_mouse_event(event, self.MFD_W, 0)
-        )
+                self._offset_mouse_event(event, self.MFD_W, 0),
+                )
         self._panels['left_mfd'].handle_event(event)
         self._panels['right_mfd'].handle_event(
-            self._offset_mouse_event(event, -(self.W - self.MFD_W), 0)
-        )
+                self._offset_mouse_event(event, -(self.W - self.MFD_W), 0),
+                )
         self._panels['timeline'].handle_event(
-            self._offset_mouse_event(event, 0, -(self.H - self.TIMELINE_H))
-        )
+                self._offset_mouse_event(event, 0, -(self.H - self.TIMELINE_H)),
+                )
 
     @staticmethod
-    def _offset_mouse_event(event: pygame.Event,
-                             dx: int, dy: int) -> pygame.Event:
+    def _offset_mouse_event(event: pygame.event,
+                            dx: int, dy: int,
+                            ) -> pygame.event:
         """Return a shallow copy of a mouse event with shifted coordinates."""
         if event.type in (pygame.MOUSEBUTTONDOWN,
                           pygame.MOUSEBUTTONUP,
-                          pygame.MOUSEMOTION):
+                          pygame.MOUSEMOTION,
+                          ):
             d = event.__dict__.copy()
             x, y = d.get('pos', (0, 0))
             d['pos'] = (x + dx, y + dy)

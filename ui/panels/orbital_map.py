@@ -20,7 +20,7 @@ class OrbitalMap:
     Left-click body  : select / focus
     """
 
-    MIN_SCALE = 1e-12   # px / m
+    MIN_SCALE = 1e-12  # px / m
     MAX_SCALE = 1e-6
 
     def __init__(self, rect: pygame.Rect):
@@ -28,7 +28,7 @@ class OrbitalMap:
         self.surface = pygame.Surface((rect.width, rect.height))
 
         # View state
-        self._scale = 1.5e-9          # pixels per metre (shows inner solar system)
+        self._scale = 1.5e-9  # pixels per metre (shows inner solar system)
         self._offset = np.array([rect.width / 2, rect.height / 2], dtype=float)
         self._dragging = False
         self._drag_start = None
@@ -66,11 +66,11 @@ class OrbitalMap:
             lx, ly = self._to_local(event.pos)
             if not self._in_bounds(lx, ly):
                 return
-            if event.button == 4:   # wheel up
+            if event.button == 4:  # wheel up
                 self._zoom(1.15, lx, ly)
-            elif event.button == 5: # wheel down
+            elif event.button == 5:  # wheel down
                 self._zoom(1 / 1.15, lx, ly)
-            elif event.button == 2: # middle button
+            elif event.button == 2:  # middle button
                 self._dragging = True
                 self._drag_start = np.array([lx, ly], dtype=float)
                 self._offset_start = self._offset.copy()
@@ -120,7 +120,8 @@ class OrbitalMap:
             radius = 4 if name not in ('Moon',) else 2
             if name == self._selected_body:
                 pygame.draw.circle(self.surface, Colors.BRIGHT_CYAN,
-                                   (int(px), int(py)), radius + 3, 1)
+                                   (int(px), int(py)), radius + 3, 1,
+                                   )
             pygame.draw.circle(self.surface, color, (int(px), int(py)), radius)
             lbl = self._font_label.render(name, True, color)
             self.surface.blit(lbl, (int(px) + radius + 2, int(py) - 6))
@@ -134,8 +135,8 @@ class OrbitalMap:
                 continue
             # Draw a small triangle marker
             tip = (int(px), int(py) - 7)
-            bl  = (int(px) - 5, int(py) + 4)
-            br  = (int(px) + 5, int(py) + 4)
+            bl = (int(px) - 5, int(py) + 4)
+            br = (int(px) + 5, int(py) + 4)
             pygame.draw.polygon(self.surface, Colors.SPACECRAFT_COLOR, [tip, bl, br], 1)
             lbl = self._font_label.render(name, True, Colors.SPACECRAFT_COLOR)
             self.surface.blit(lbl, (int(px) + 8, int(py) - 6))
@@ -148,11 +149,14 @@ class OrbitalMap:
             x0 = 20
             y0 = self.rect.height - 25
             pygame.draw.line(self.surface, Colors.DIM_WHITE,
-                             (x0, y0), (x0 + bar_px, y0), 2)
+                             (x0, y0), (x0 + bar_px, y0), 2,
+                             )
             pygame.draw.line(self.surface, Colors.DIM_WHITE,
-                             (x0, y0 - 4), (x0, y0 + 4), 2)
+                             (x0, y0 - 4), (x0, y0 + 4), 2,
+                             )
             pygame.draw.line(self.surface, Colors.DIM_WHITE,
-                             (x0 + bar_px, y0 - 4), (x0 + bar_px, y0 + 4), 2)
+                             (x0 + bar_px, y0 - 4), (x0 + bar_px, y0 + 4), 2,
+                             )
             label_text = self._format_distance(bar_m)
             lbl = self._font_small.render(label_text, True, Colors.DIM_WHITE)
             self.surface.blit(lbl, (x0, y0 - 16))
@@ -164,7 +168,7 @@ class OrbitalMap:
     def _world_to_screen(self, pos_m: np.ndarray):
         """Convert 3-D world position (m) to 2-D screen pixel coords."""
         x = pos_m[0] * self._scale + self._offset[0]
-        y = -pos_m[1] * self._scale + self._offset[1]   # flip y
+        y = -pos_m[1] * self._scale + self._offset[1]  # flip y
         return x, y
 
     def _to_local(self, window_pos):
@@ -209,5 +213,5 @@ class OrbitalMap:
             return f"{au:.2f} AU"
         km = metres / 1000
         if km >= 1000:
-            return f"{km/1000:.0f} Mm"
+            return f"{km / 1000:.0f} Mm"
         return f"{km:.0f} km"

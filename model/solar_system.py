@@ -1,13 +1,13 @@
 # model/solar_system.py
 
 import logging
-from typing import Dict, Optional
 from dataclasses import dataclass
+from typing import Dict, Optional
 
 import numpy as np
 from astropy import units as u
 from astropy.time import Time
-from poliastro.bodies import Sun, Mercury, Venus, Earth, Moon, Mars, Jupiter, Saturn, Uranus, Neptune
+from poliastro.bodies import Earth, Jupiter, Mars, Mercury, Moon, Neptune, Saturn, Uranus, Venus
 from poliastro.ephem import Ephem
 from poliastro.twobody import Orbit
 
@@ -24,16 +24,16 @@ class SolarSystem:
     """Solar system model with planetary ephemerides."""
 
     BODIES = {
-        'Mercury': Mercury,
-        'Venus': Venus,
-        'Earth': Earth,
-        'Moon': Moon,
-        'Mars': Mars,
-        'Jupiter': Jupiter,
-        'Saturn': Saturn,
-        'Uranus': Uranus,
-        'Neptune': Neptune,
-    }
+            'Mercury': Mercury,
+            'Venus'  : Venus,
+            'Earth'  : Earth,
+            'Moon'   : Moon,
+            'Mars'   : Mars,
+            'Jupiter': Jupiter,
+            'Saturn' : Saturn,
+            'Uranus' : Uranus,
+            'Neptune': Neptune,
+            }
 
     def __init__(self, epoch: Time = None):
         self.epoch = epoch if epoch is not None else Time.now()
@@ -50,9 +50,9 @@ class SolarSystem:
 
         offsets = np.linspace(-180, 180, 9) * u.day
         t_range = Time(
-            [epoch_tdb + offset for offset in offsets],
-            scale='tdb'
-        )
+                [epoch_tdb + offset for offset in offsets],
+                scale='tdb',
+                )
 
         for name, body in self.BODIES.items():
             try:

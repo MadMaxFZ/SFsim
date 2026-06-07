@@ -1,10 +1,11 @@
 """Rotation and attitude dynamics module for spacecraft simulation."""
 
-import numpy as np
 from dataclasses import dataclass
 from typing import Tuple
+
 import astropy.units as u
-from numpy.linalg import inv
+import numpy as np
+
 
 @dataclass
 class Quaternion:
@@ -16,7 +17,7 @@ class Quaternion:
 
     def __post_init__(self):
         """Normalize the quaternion to ensure it's a unit quaternion."""
-        norm = np.sqrt(self.w**2 + self.x**2 + self.y**2 + self.z**2)
+        norm = np.sqrt(self.w ** 2 + self.x ** 2 + self.y ** 2 + self.z ** 2)
         self.w /= norm
         self.x /= norm
         self.y /= norm
@@ -26,6 +27,7 @@ class Quaternion:
         """Return the conjugate of this quaternion."""
         return Quaternion(self.w, -self.x, -self.y, -self.z)
 
+
 def multiply_quaternions(q1: Quaternion, q2: Quaternion) -> Quaternion:
     """Multiply two quaternions."""
     w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
@@ -34,11 +36,13 @@ def multiply_quaternions(q1: Quaternion, q2: Quaternion) -> Quaternion:
     z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w
     return Quaternion(w, x, y, z)
 
+
 class RotationState:
     """Represents the rotational state of a rigid body."""
 
     def __init__(self, orientation: Quaternion, angular_velocity: u.Quantity,
-                 inertia_tensor: np.ndarray):
+                 inertia_tensor: np.ndarray,
+                 ):
         """
         Initialize rotation state.
 
@@ -66,7 +70,8 @@ class RotationState:
 
         # Euler's rotation equation: I*ω̇ + ω×(I*ω) = τ
         omega_dot = np.dot(np.linalg.inv(self.inertia_tensor),
-                          torque - np.cross(omega, np.dot(self.inertia_tensor, omega)))
+                           torque - np.cross(omega, np.dot(self.inertia_tensor, omega)),
+                           )
 
         # Update angular velocity (first-order integration)
         new_omega = omega + omega_dot * dt
@@ -77,26 +82,26 @@ class RotationState:
             axis = new_omega / omega_norm
             angle = omega_norm * dt
             q_delta = Quaternion(
-                np.cos(angle/2),
-                axis[0] * np.sin(angle/2),
-                axis[1] * np.sin(angle/2),
-                axis[2] * np.sin(angle/2)
-            )
+                    np.cos(angle / 2),
+                    axis[0] * np.sin(angle / 2),
+                    axis[1] * np.sin(angle / 2),
+                    axis[2] * np.sin(angle / 2),
+                    )
             self.orientation = multiply_quaternions(q_delta, self.orientation)
 
         # Update angular velocity (with units)
         self.angular_velocity = new_omega * u.rad / u.s
 
         # Renormalize quaternion to prevent drift
-        norm = np.sqrt(self.orientation.w**2 + self.orientation.x**2 +
-                      self.orientation.y**2 + self.orientation.z**2)
+        norm = np.sqrt(self.orientation.w ** 2 + self.orientation.x ** 2 +
+                       self.orientation.y ** 2 + self.orientation.z ** 2,
+                       )
         self.orientation = Quaternion(
-            self.orientation.w / norm,
-            self.orientation.x / norm,
-            self.orientation.y / norm,
-            self.orientation.z / norm
-        )
-
+                self.orientation.w / norm,
+                self.orientation.x / norm,
+                self.orientation.y / norm,
+                self.orientation.z / norm,
+                )
 
 
 def quaternion_to_euler(q: Quaternion) -> Tuple[float, float, float]:

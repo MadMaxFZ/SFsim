@@ -41,11 +41,12 @@ class SpacecraftRotation:
             # Quaternion derivative: dq/dt = 0.5 * Omega(omega) * q
             wx, wy, wz = omega
             omega_matrix = 0.5 * np.array([
-                [0,  -wx, -wy, -wz],
-                [wx,   0,  wz, -wy],
-                [wy, -wz,   0,  wx],
-                [wz,  wy, -wx,   0]
-            ])
+                    [0, -wx, -wy, -wz],
+                    [wx, 0, wz, -wy],
+                    [wy, -wz, 0, wx],
+                    [wz, wy, -wx, 0],
+                    ],
+                    )
             self.quaternion = self.quaternion + omega_matrix @ self.quaternion * dt
             # Normalize quaternion
             q_norm = np.linalg.norm(self.quaternion)
@@ -92,4 +93,3 @@ class Spacecraft:
     def get_angular_velocity_str(self) -> str:
         """Return angular velocity as a formatted string."""
         return np.array2string(self.rotation.angular_velocity, precision=6, suppress_small=True)
-

@@ -42,7 +42,7 @@ class TimelineBar:
         self._draw_pause_button()
         return self.surface
 
-    def handle_event(self, event: pygame.Event) -> None:
+    def handle_event(self, event: pygame.event) -> None:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             lx = event.pos[0] - self.rect.x
             ly = event.pos[1] - self.rect.y

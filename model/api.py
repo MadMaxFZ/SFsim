@@ -1,14 +1,15 @@
 # model/api.py
 
 import logging
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict
+
 import numpy as np
 from astropy import units as u
 from astropy.time import Time
 from poliastro.twobody import Orbit
 
-from model.spacecraft import Spacecraft
 from model.solar_system import SolarSystem
+from model.spacecraft import Spacecraft
 
 
 class ControlHook:
@@ -34,7 +35,8 @@ class SpaceflightSimAPI:
         logging.info("SpaceflightSimAPI initialized with control hook system")
 
     def add_spacecraft(self, name: str, orbit: Orbit,
-                       mass: u.Quantity = 1000 * u.kg) -> None:
+                       mass: u.Quantity = 1000 * u.kg,
+                       ) -> None:
         """Add a spacecraft to the simulation."""
         if name in self.spacecraft:
             raise ValueError(f"Spacecraft {name} already exists")
@@ -43,11 +45,11 @@ class SpaceflightSimAPI:
         logging.info(f"Added spacecraft {name} with mass {mass.to(u.kg).value} kg")
 
     def register_spacecraft_hook(
-        self,
-        spacecraft_name: str,
-        callback: Callable,
-        hook_type: str
-    ) -> None:
+            self,
+            spacecraft_name: str,
+            callback: Callable,
+            hook_type: str,
+            ) -> None:
         """
         Register a control hook for a spacecraft.
 
@@ -150,7 +152,8 @@ class SpaceflightSimAPI:
         return sc.orbit.state
 
     def apply_spacecraft_maneuver(self, name: str,
-                                   delta_v: np.ndarray) -> None:
+                                  delta_v: np.ndarray,
+                                  ) -> None:
         """
         Apply an impulsive maneuver to a spacecraft.
 
@@ -185,8 +188,8 @@ class SpaceflightSimAPI:
         state2 = self.solar_system.get_body_state(body2)
         if state1 is None or state2 is None:
             raise ValueError(
-                f"Could not find states for {body1} and/or {body2}"
-            )
+                    f"Could not find states for {body1} and/or {body2}",
+                    )
         r1 = state1.orbit.r.to(u.km).value
         r2 = state2.orbit.r.to(u.km).value
         return r2 - r1

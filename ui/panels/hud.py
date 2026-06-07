@@ -39,7 +39,7 @@ class HUD:
         self._draw_attitude_indicator()
         return self.surface
 
-    def handle_event(self, event: pygame.Event) -> None:
+    def handle_event(self, event: pygame.event) -> None:
         pass  # HUD is read-only for now
 
     # ------------------------------------------------------------------
