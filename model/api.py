@@ -8,6 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class SpaceflightSimAPI:
     """Production-ready API for spaceflight simulation.
 

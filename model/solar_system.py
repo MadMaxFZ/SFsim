@@ -2,8 +2,8 @@ from poliastro.bodies import (
     Body, Sun,
     Mercury, Venus, Earth, Moon,
     Mars, Jupiter, Saturn,
-    Uranus, Neptune
-)
+    Uranus, Neptune,
+    )
 from poliastro.twobody import Orbit
 from astropy.time import Time
 from astropy import units as u
@@ -14,11 +14,13 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class BodyState:
     """Container for celestial body state information."""
     position: np.ndarray  # km
     velocity: np.ndarray  # km/s
+
 
 class SolarSystem:
     """High-performance solar system simulator with major celestial bodies.
@@ -32,15 +34,15 @@ class SolarSystem:
 
     # Orbital parameters (semi-major axis in AU)
     PLANETARY_DISTANCES = {
-        "Mercury": 0.387098,
-        "Venus": 0.723332,
-        "Earth": 1.000000,
-        "Mars": 1.523679,
-        "Jupiter": 5.202603,
-        "Saturn": 9.554909,
-        "Uranus": 19.218446,
-        "Neptune": 30.110387
-    }
+            "Mercury": 0.387098,
+            "Venus"  : 0.723332,
+            "Earth"  : 1.000000,
+            "Mars"   : 1.523679,
+            "Jupiter": 5.202603,
+            "Saturn" : 9.554909,
+            "Uranus" : 19.218446,
+            "Neptune": 30.110387,
+            }
 
     # Average Moon distance from Earth in km
     MOON_DISTANCE = 384_400
@@ -48,17 +50,17 @@ class SolarSystem:
     def __init__(self):
         """Initialize the solar system with all major bodies."""
         self.bodies: Dict[str, Body] = {
-            "Sun": Sun,
-            "Mercury": Mercury,
-            "Venus": Venus,
-            "Earth": Earth,
-            "Moon": Moon,
-            "Mars": Mars,
-            "Jupiter": Jupiter,
-            "Saturn": Saturn,
-            "Uranus": Uranus,
-            "Neptune": Neptune,
-        }
+                "Sun"    : Sun,
+                "Mercury": Mercury,
+                "Venus"  : Venus,
+                "Earth"  : Earth,
+                "Moon"   : Moon,
+                "Mars"   : Mars,
+                "Jupiter": Jupiter,
+                "Saturn" : Saturn,
+                "Uranus" : Uranus,
+                "Neptune": Neptune,
+                }
         self.orbits: Dict[str, Orbit] = {}
         self._state_cache: Dict[str, BodyState] = {}
         self._initialize_orbits()
@@ -74,21 +76,21 @@ class SolarSystem:
             try:
                 if name == "Moon":
                     self.orbits[name] = Orbit.circular(
-                        attractor=Earth,
-                        alt=self.MOON_DISTANCE * u.km,
-                        epoch=j2000
-                    )
+                            attractor=Earth,
+                            alt=self.MOON_DISTANCE * u.km,
+                            epoch=j2000,
+                            )
                 else:
                     self.orbits[name] = Orbit.circular(
-                        attractor=Sun,
-                        alt=self.PLANETARY_DISTANCES[name] * u.au,
-                        epoch=j2000
-                    )
+                            attractor=Sun,
+                            alt=self.PLANETARY_DISTANCES[name] * u.au,
+                            epoch=j2000,
+                            )
                 # Cache initial state
                 self._state_cache[name] = BodyState(
-                    position=self.orbits[name].r.to(u.km).value,
-                    velocity=self.orbits[name].v.to(u.km/u.s).value
-                )
+                        position=self.orbits[name].r.to(u.km).value,
+                        velocity=self.orbits[name].v.to(u.km / u.s).value,
+                        )
             except Exception as e:
                 logger.error(f"Failed to initialize orbit for {name}: {str(e)}")
                 raise
@@ -104,9 +106,9 @@ class SolarSystem:
                 self.orbits[name] = orbit.propagate(time_step)
                 # Update cache
                 self._state_cache[name] = BodyState(
-                    position=self.orbits[name].r.to(u.km).value,
-                    velocity=self.orbits[name].v.to(u.km/u.s).value
-                )
+                        position=self.orbits[name].r.to(u.km).value,
+                        velocity=self.orbits[name].v.to(u.km / u.s).value,
+                        )
             except Exception as e:
                 logger.error(f"Propagation failed for {name}: {str(e)}")
                 raise

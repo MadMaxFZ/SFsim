@@ -8,12 +8,14 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class SpacecraftState:
     """Container for spacecraft state information."""
     position: np.ndarray  # km
     velocity: np.ndarray  # km/s
     mass: float  # kg
+
 
 class Spacecraft:
     """Advanced spacecraft model with maneuvering and fuel consumption.
@@ -39,10 +41,10 @@ class Spacecraft:
         self.mass = mass
         self.isp = isp
         self._state_cache = SpacecraftState(
-            position=self.orbit.r.to(u.km).value,
-            velocity=self.orbit.v.to(u.km/u.s).value,
-            mass=self.mass.value
-        )
+                position=self.orbit.r.to(u.km).value,
+                velocity=self.orbit.v.to(u.km / u.s).value,
+                mass=self.mass.value,
+                )
         logger.info(f"Initialized spacecraft {name} with mass {mass}")
 
     def propagate(self, time_step: u.Quantity):
@@ -55,10 +57,10 @@ class Spacecraft:
             self.orbit = self.orbit.propagate(time_step)
             # Update cache
             self._state_cache = SpacecraftState(
-                position=self.orbit.r.to(u.km).value,
-                velocity=self.orbit.v.to(u.km/u.s).value,
-                mass=self.mass.value
-            )
+                    position=self.orbit.r.to(u.km).value,
+                    velocity=self.orbit.v.to(u.km / u.s).value,
+                    mass=self.mass.value,
+                    )
         except Exception as e:
             logger.error(f"Propagation failed for {self.name}: {str(e)}")
             raise
@@ -71,22 +73,22 @@ class Spacecraft:
         """
         try:
             # Calculate fuel consumption
-            delta_v_mag = np.linalg.norm(delta_v) * u.km/u.s
+            delta_v_mag = np.linalg.norm(delta_v) * u.km / u.s
             if delta_v_mag.value > 0:
-                g0 = 9.80665 * u.m/u.s**2  # Standard gravity
-                fuel_mass = self.mass * (1 - np.exp(-delta_v_mag/(self.isp * g0)))
+                g0 = 9.80665 * u.m / u.s ** 2  # Standard gravity
+                fuel_mass = self.mass * (1 - np.exp(-delta_v_mag / (self.isp * g0)))
                 self.mass -= fuel_mass
 
             # Apply maneuver
-            maneuver = Maneuver.impulse(delta_v * u.km/u.s)
+            maneuver = Maneuver.impulse(delta_v * u.km / u.s)
             self.orbit = self.orbit.apply_maneuver(maneuver)
 
             # Update cache
             self._state_cache = SpacecraftState(
-                position=self.orbit.r.to(u.km).value,
-                velocity=self.orbit.v.to(u.km/u.s).value,
-                mass=self.mass.value
-            )
+                    position=self.orbit.r.to(u.km).value,
+                    velocity=self.orbit.v.to(u.km / u.s).value,
+                    mass=self.mass.value,
+                    )
             logger.info(f"Applied Δv={delta_v} km/s to {self.name}, fuel used: {fuel_mass:.2f}")
         except Exception as e:
             logger.error(f"Maneuver failed for {self.name}: {str(e)}")
