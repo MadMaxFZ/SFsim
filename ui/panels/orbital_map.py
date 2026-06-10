@@ -59,7 +59,7 @@ class OrbitalMap(PanelBase):
         cx = self.rect.width / 2 + self.center_offset[0] * self.scale
         cy = self.rect.height / 2 + self.center_offset[1] * self.scale
         px = cx + x_au * self.scale
-        py = cy - y_au * self.scale # y flipped for screen coords
+        py = cy - y_au * self.scale  # y flipped for screen coords
         pass
         return int(px), int(py)
 
@@ -107,11 +107,17 @@ class OrbitalMap(PanelBase):
     def _draw_spacecraft(self) -> None:
         state = self.api.get_system_state()
         spacecraft = state.get('spacecraft', {})
+        body_set = state.get('bodies')
         for name, data in spacecraft.items():
             pos = data.get('position_km')
+            attr_pos = body_set[data.get('orbit').attractor.name].get('position_km')
             if pos is None:
                 continue
-            x, y = self.world_to_screen(pos[0], pos[1])
+
+            atr_x, atr_y = self.world_to_screen(attr_pos[0], attr_pos[1])
+            sat_x, sat_y = self.world_to_screen(pos[0], pos[1])
+            x = atr_x + sat_x
+            y = atr_y - sat_y       # add ship position to its parent body's position
             if not (0 <= x < self.rect.width and 0 <= y < self.rect.height):
                 continue
             # Draw diamond marker

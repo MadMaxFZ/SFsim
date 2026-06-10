@@ -42,10 +42,10 @@ class MFD(PanelBase):
         self._draw_header()
         self._draw_osbs()
         self._draw_content()
-        self._draw_orbit_data()
-        self._draw_nav_data()
-        self._draw_systems_data()
-        self._draw_attitude_data()
+        # self._draw_orbit_data()
+        # self._draw_nav_data()
+        # self._draw_systems_data()
+        # self._draw_attitude_data()
 
     def _draw_header(self) -> None:
         self.draw_label(
@@ -88,8 +88,8 @@ class MFD(PanelBase):
         for name, data in spacecraft.items():
             self.draw_label(name, 6, y, color=self.COLOR_ACCENT)
             y += 18
-            pos = data.get('position_m', [0, 0, 0])
-            vel = data.get('velocity_ms', [0, 0, 0])
+            pos = data.get('position_km', [0, 0, 0])
+            vel = data.get('velocity_kms', [0, 0, 0])
             r_km = (sum(p**2 for p in pos)**0.5) / 1000
             v_ms = (sum(v**2 for v in vel)**0.5)
             self.draw_label(f"R: {r_km:>10.1f} km", 6, y,

@@ -58,8 +58,10 @@ class PanelBase(ABC):
     def render(self) -> None:
         pass
 
+    @abstractmethod
     def update(self, dt: float) -> None:
         pass
 
+    @abstractmethod
     def handle_event(self, event: pygame.event.Event) -> None:
         pass

@@ -101,8 +101,8 @@ class Spacecraft:
     @property
     def state(self):
         return {        'name'                 : self.name,
-                        'position_m'           : self.orbit.r,
-                        'velocity_ms'          : self.orbit.v,
+                        'position_km'          : self.orbit.r.to(u.km),
+                        'velocity_kms'         : self.orbit.v.to(u.km / u.s),
                         'mass_kg'              : self.mass.to(u.kg).value,
                         'angular_velocity_rads': self.rotation.angular_velocity,
                         'quaternion'           : self.rotation.quaternion,

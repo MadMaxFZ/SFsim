@@ -33,8 +33,8 @@ class DisplayManager:
     HUD is overlaid on the main view.
     """
 
-    WIDTH = 1600
-    HEIGHT = 1000
+    WIDTH = 1650
+    HEIGHT = 980
     FPS_TARGET = 60
 
     # Layout rects

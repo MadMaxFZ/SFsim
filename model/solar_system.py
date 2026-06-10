@@ -82,4 +82,4 @@ class SolarSystem:
                 state.orbit = state.orbit.propagate(time_step)
             except Exception as e:
                 logging.warning(f"Could not propagate orbit for {name}: {str(e)}")
-        self.epoch = new_epoch
+        self.epoch += time_step

@@ -113,32 +113,31 @@ class SpaceflightSimAPI:
         bodies = {}
         for name, body_state in self.solar_system.body_states.items():
             try:
-                r_km = body_state.orbit.r.to(u.km)    #.value.tolist()
-                v_kms = body_state.orbit.v.to(u.km / u.s) #.value.tolist()
-                bodies[name] = {
-                        'position_km' : r_km,
-                        'velocity_kms': v_kms,
-                        }
+                r_km = body_state.orbit.r.to(u.km)
+                v_kms = body_state.orbit.v.to(u.km / u.s)
+                bodies[name] = {'position_km' : r_km,
+                                'velocity_kms': v_kms,
+                                }
+
             except Exception as e:
                 logging.warning(f"Could not get state for body {name}: {e}")
 
         spacecraft = {}
         for name, sc in self.spacecraft.items():
             try:
-                r_m = sc.orbit.r.to(u.km)    #.value.tolist()
-                v_ms = sc.orbit.v.to(u.km / u.s) #.value.tolist()
+                r_m = sc.orbit.r.to(u.km)
+                v_ms = sc.orbit.v.to(u.km / u.s)
                 spacecraft[name] = sc.state
 
             except Exception as e:
                 logging.warning(f"Could not get state for spacecraft {name}: {e}")
 
-        res = {
-                'epoch'            : str(self.solar_system.epoch.iso),
-                'simulation_time_s': str(self.simulation_time),
-                'time_warp'        : self.time_warp,
-                'bodies'           : bodies,
-                'spacecraft'       : spacecraft,
-                }
+        res = {'epoch'            : str(self.solar_system.epoch.iso),
+               'simulation_time_s': str(self.simulation_time),
+               'time_warp'        : self.time_warp,
+               'bodies'           : bodies,
+               'spacecraft'       : spacecraft,
+               }
         pass
         return res
 
