@@ -1,56 +1,40 @@
+#!/usr/bin/python
 # ui/panels/telemetry_panel.py
 
 import pygame
-from ui.colors import Colors
+from ui.panel_base import PanelBase
 
 
-class TelemetryPanel:
+class TelemetryPanel(PanelBase):
     """
-    Horizontal strip below the orbital map.
-    Shows key scalars for all spacecraft side-by-side.
+    Horizontal strip showing key telemetry values for all spacecraft.
     """
 
-    def __init__(self, rect: pygame.Rect):
-        self.rect = rect
-        self.surface = pygame.Surface((rect.width, rect.height))
-        self._state_snapshot = {}
-
-        pygame.font.init()
-        self._font = pygame.font.SysFont('monospace', 12)
-        self._font_title = pygame.font.SysFont('monospace', 12, bold=True)
-
-    def update(self, state: dict) -> None:
-        self._state_snapshot = state
-
-    def draw(self) -> pygame.Surface:
-        self.surface.fill(Colors.PANEL_BG)
-        pygame.draw.line(self.surface, Colors.PANEL_BORDER,
-                         (0, 0), (self.rect.width, 0), 2)
-
-        sc_data = self._state_snapshot.get('spacecraft', {})
+    def render(self) -> None:
+        self.clear()
+        self.draw_border()
+        state = self.api.get_system_state()
+        spacecraft = state.get('spacecraft', {})
         x = 10
-        for name, sc in sc_data.items():
-            pos = sc['position_m']
-            vel = sc['velocity_ms']
-            r_km  = (sum(p**2 for p in pos)**0.5) / 1000
-            v_ms  = (sum(v**2 for v in vel)**0.5)
-            alt   = r_km - 6371.0
+        for name, data in spacecraft.items():
+            self._draw_spacecraft_strip(name, data, x)
+            x += 300
 
-            col_lines = [
-                name,
-                f"ALT {alt:.1f} km",
-                f"SPD {v_ms:.1f} m/s",
-                f"M   {sc['mass_kg']:.0f} kg",
-            ]
-            y = 6
-            for i, line in enumerate(col_lines):
-                color = Colors.BRIGHT_CYAN if i == 0 else Colors.GREEN
-                surf = self._font.render(line, True, color)
-                self.surface.blit(surf, (x, y))
-                y += 16
-            x += 220
-
-        return self.surface
-
-    def handle_event(self, event: pygame.event) -> None:
-        pass
+    def _draw_spacecraft_strip(self, name: str, data: dict, x: int) -> None:
+        y = 8
+        self.draw_label(name, x, y, color=self.COLOR_ACCENT)
+        y += 20
+        pos = data.get('position_m', [0, 0, 0])
+        vel = data.get('velocity_ms', [0, 0, 0])
+        r_km = (sum(p**2 for p in pos)**0.5) / 1000
+        v_ms = (sum(v**2 for v in vel)**0.5)
+        omega = data.get('angular_velocity_rads', [0, 0, 0])
+        omega_mag = (sum(w**2 for w in omega)**0.5)
+        fields = [
+            f"POS: {r_km:>12.1f} km",
+            f"VEL: {v_ms:>10.2f} m/s",
+            f"|ω|: {omega_mag:>10.5f} r/s",
+        ]
+        for field in fields:
+            self.draw_label(field, x, y, font=self.FONT_MONO_SM)
+            y += 16

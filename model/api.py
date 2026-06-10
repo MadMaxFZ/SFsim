@@ -1,15 +1,15 @@
 # model/api.py
 
 import logging
-from typing import Callable, Dict
-
+from typing import Callable, Dict, Optional
 import numpy as np
 from astropy import units as u
 from astropy.time import Time
+from poliastro.constants import J2000_TDB
 from poliastro.twobody import Orbit
 
-from model.solar_system import SolarSystem
 from model.spacecraft import Spacecraft
+from model.solar_system import SolarSystem
 
 
 class ControlHook:
@@ -26,17 +26,16 @@ class ControlHook:
 class SpaceflightSimAPI:
     """API for interacting with the spaceflight simulation model."""
 
-    def __init__(self, epoch: Time = None):
-        self.solar_system = SolarSystem(epoch=epoch)
+    def __init__(self, epoch: Time = J2000_TDB):
         self.spacecraft: Dict[str, Spacecraft] = {}
         self.hooks: Dict[str, Dict[str, ControlHook]] = {}
-        self.simulation_time = 0.0 * u.s
+        self.simulation_time = epoch
         self.time_warp = 1
+        self.solar_system = SolarSystem(epoch=epoch)
         logging.info("SpaceflightSimAPI initialized with control hook system")
 
     def add_spacecraft(self, name: str, orbit: Orbit,
-                       mass: u.Quantity = 1000 * u.kg,
-                       ) -> None:
+                       mass: u.Quantity = 1000 * u.kg) -> None:
         """Add a spacecraft to the simulation."""
         if name in self.spacecraft:
             raise ValueError(f"Spacecraft {name} already exists")
@@ -45,11 +44,11 @@ class SpaceflightSimAPI:
         logging.info(f"Added spacecraft {name} with mass {mass.to(u.kg).value} kg")
 
     def register_spacecraft_hook(
-            self,
-            spacecraft_name: str,
-            callback: Callable,
-            hook_type: str,
-            ) -> None:
+        self,
+        spacecraft_name: str,
+        callback: Callable,
+        hook_type: str
+    ) -> None:
         """
         Register a control hook for a spacecraft.
 
@@ -58,27 +57,29 @@ class SpaceflightSimAPI:
             callback: Function with signature func(time_step, spacecraft)
             hook_type: One of 'pre_attitude_control', 'post_attitude_control'
         """
-        if spacecraft_name not in self.spacecraft:
+        if spacecraft_name not in self.spacecraft.keys():
             raise ValueError(f"Spacecraft {spacecraft_name} not found")
         self.hooks[spacecraft_name][hook_type] = ControlHook(callback, hook_type)
         logging.info(f"Registered spacecraft control hook: {hook_type}")
 
     def propagate_system(self, time_step: u.Quantity) -> None:
         """Propagate the entire system forward in time."""
-        self.solar_system.propagate(time_step)
+        self.solar_system.propagate(time_step * self.time_warp)
 
-        for name, spacecraft in self.spacecraft.items():
+        for name, sc in self.spacecraft.items():
             if "pre_attitude_control" in self.hooks[name]:
-                self.hooks[name]["pre_attitude_control"](time_step, spacecraft)
+                self.hooks[name]["pre_attitude_control"](time_step * self.time_warp,
+                                                         self.get_spacecraft_state(name))
 
-            spacecraft.propagate_attitude(time_step)
+            sc.propagate_attitude(time_step * self.time_warp)
 
             if "post_attitude_control" in self.hooks[name]:
-                self.hooks[name]["post_attitude_control"](time_step, spacecraft)
+                self.hooks[name]["post_attitude_control"](time_step * self.time_warp,
+                                                          self.get_spacecraft_state(name))
 
-            spacecraft.propagate_orbit(time_step)
+            sc.propagate_orbit(time_step * self.time_warp)
 
-        self.simulation_time = self.simulation_time + time_step
+        self.simulation_time = self.simulation_time + time_step * self.time_warp
 
     # model/api.py
     # Only the get_system_state() method needs updating — full method shown:
@@ -94,14 +95,14 @@ class SpaceflightSimAPI:
                 'time_warp': int,
                 'bodies': {
                     name: {
-                        'position_m': [x, y, z],
-                        'velocity_ms': [vx, vy, vz],
+                        'position_km': [x, y, z],
+                        'velocity_kms': [vx, vy, vz],
                     }, ...
                 },
                 'spacecraft': {
                     name: {
-                        'position_m': [x, y, z],
-                        'velocity_ms': [vx, vy, vz],
+                        'position_km': [x, y, z],
+                        'velocity_kms': [vx, vy, vz],
                         'mass_kg': float,
                         'angular_velocity_rads': [wx, wy, wz],
                         'quaternion': [q0, q1, q2, q3],
@@ -112,11 +113,11 @@ class SpaceflightSimAPI:
         bodies = {}
         for name, body_state in self.solar_system.body_states.items():
             try:
-                r_m = body_state.orbit.r.to(u.m).value.tolist()
-                v_ms = body_state.orbit.v.to(u.m / u.s).value.tolist()
+                r_km = body_state.orbit.r.to(u.km)    #.value.tolist()
+                v_kms = body_state.orbit.v.to(u.km / u.s) #.value.tolist()
                 bodies[name] = {
-                        'position_m' : r_m,
-                        'velocity_ms': v_ms,
+                        'position_km' : r_km,
+                        'velocity_kms': v_kms,
                         }
             except Exception as e:
                 logging.warning(f"Could not get state for body {name}: {e}")
@@ -124,36 +125,32 @@ class SpaceflightSimAPI:
         spacecraft = {}
         for name, sc in self.spacecraft.items():
             try:
-                r_m = sc.orbit.r.to(u.m).value.tolist()
-                v_ms = sc.orbit.v.to(u.m / u.s).value.tolist()
-                spacecraft[name] = {
-                        'position_m'           : r_m,
-                        'velocity_ms'          : v_ms,
-                        'mass_kg'              : sc.mass.to(u.kg).value,
-                        'angular_velocity_rads': sc.rotation.angular_velocity.tolist(),
-                        'quaternion'           : sc.rotation.quaternion.tolist(),
-                        }
+                r_m = sc.orbit.r.to(u.km)    #.value.tolist()
+                v_ms = sc.orbit.v.to(u.km / u.s) #.value.tolist()
+                spacecraft[name] = sc.state
+
             except Exception as e:
                 logging.warning(f"Could not get state for spacecraft {name}: {e}")
 
-        return {
+        res = {
                 'epoch'            : str(self.solar_system.epoch.iso),
-                'simulation_time_s': self.simulation_time.to(u.s).value,
+                'simulation_time_s': str(self.simulation_time),
                 'time_warp'        : self.time_warp,
                 'bodies'           : bodies,
                 'spacecraft'       : spacecraft,
                 }
+        pass
+        return res
 
     def get_spacecraft_state(self, name: str):
         """Get the current state of a spacecraft."""
-        if name not in self.spacecraft:
+        if name not in self.spacecraft.keys():
             raise ValueError(f"Spacecraft {name} not found")
         sc = self.spacecraft[name]
-        return sc.orbit.state
+        return sc.state
 
     def apply_spacecraft_maneuver(self, name: str,
-                                  delta_v: np.ndarray,
-                                  ) -> None:
+                                   delta_v: np.ndarray) -> None:
         """
         Apply an impulsive maneuver to a spacecraft.
 
@@ -161,7 +158,7 @@ class SpaceflightSimAPI:
             name: Spacecraft name
             delta_v: Delta-v vector in km/s (plain numpy array, shape (3,))
         """
-        if name not in self.spacecraft:
+        if name not in self.spacecraft.keys():
             raise ValueError(f"Spacecraft {name} not found")
         sc = self.spacecraft[name]
         dv = delta_v * u.km / u.s
@@ -188,8 +185,8 @@ class SpaceflightSimAPI:
         state2 = self.solar_system.get_body_state(body2)
         if state1 is None or state2 is None:
             raise ValueError(
-                    f"Could not find states for {body1} and/or {body2}",
-                    )
+                f"Could not find states for {body1} and/or {body2}"
+            )
         r1 = state1.orbit.r.to(u.km).value
         r2 = state2.orbit.r.to(u.km).value
         return r2 - r1

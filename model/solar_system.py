@@ -1,13 +1,13 @@
 # model/solar_system.py
 
 import logging
-from dataclasses import dataclass
 from typing import Dict, Optional
+from dataclasses import dataclass
 
 import numpy as np
 from astropy import units as u
 from astropy.time import Time
-from poliastro.bodies import Earth, Jupiter, Mars, Mercury, Moon, Neptune, Saturn, Uranus, Venus
+from poliastro.bodies import Sun, Mercury, Venus, Earth, Moon, Mars, Jupiter, Saturn, Uranus, Neptune, Body
 from poliastro.ephem import Ephem
 from poliastro.twobody import Orbit
 
@@ -17,23 +17,23 @@ class BodyState:
     """State of a solar system body."""
     name: str
     orbit: Optional[Orbit]
-    body: object
+    body: Body
 
 
 class SolarSystem:
     """Solar system model with planetary ephemerides."""
 
     BODIES = {
-            'Mercury': Mercury,
-            'Venus'  : Venus,
-            'Earth'  : Earth,
-            'Moon'   : Moon,
-            'Mars'   : Mars,
-            'Jupiter': Jupiter,
-            'Saturn' : Saturn,
-            'Uranus' : Uranus,
-            'Neptune': Neptune,
-            }
+        'Mercury': Mercury,
+        'Venus': Venus,
+        'Earth': Earth,
+        'Moon': Moon,
+        'Mars': Mars,
+        'Jupiter': Jupiter,
+        'Saturn': Saturn,
+        'Uranus': Uranus,
+        'Neptune': Neptune,
+    }
 
     def __init__(self, epoch: Time = None):
         self.epoch = epoch if epoch is not None else Time.now()
@@ -46,13 +46,16 @@ class SolarSystem:
         Initialize orbits using body.parent to determine the central body.
         Uses tdb scale to suppress TimeScaleWarning.
         """
-        epoch_tdb = self.epoch.tdb
+        if self.epoch.format == 'tdb':
+            epoch_tdb = self.epoch
+        else:
+            epoch_tdb = Time(self.epoch, scale='tdb')
 
         offsets = np.linspace(-180, 180, 9) * u.day
         t_range = Time(
-                [epoch_tdb + offset for offset in offsets],
-                scale='tdb',
-                )
+            [epoch_tdb + offset for offset in offsets],
+            scale='tdb'
+        )
 
         for name, body in self.BODIES.items():
             try:
@@ -62,6 +65,7 @@ class SolarSystem:
                 self.body_states[name] = BodyState(name=name, orbit=orbit, body=body)
             except Exception as e:
                 logging.warning(f"Could not initialize orbit for {name}: {str(e)}")
+        pass
 
     def get_body_state(self, name: str) -> Optional[BodyState]:
         return self.body_states.get(name)

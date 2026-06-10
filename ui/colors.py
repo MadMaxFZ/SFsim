@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # ui/colors.py
 
 class Colors:

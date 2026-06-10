@@ -11,6 +11,7 @@ class SpacecraftRotation:
     """Spacecraft rotational state."""
     quaternion: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
     angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))  # rad/s, plain array
+    inertia_tensor: np.ndarray = np.eye(3)
 
     def propagate(self, time_step: u.s, torque: u.Quantity, inertia_tensor: np.ndarray) -> None:
         """
@@ -38,15 +39,14 @@ class SpacecraftRotation:
         omega_norm = float(np.linalg.norm(omega))
 
         if omega_norm > 1e-10:
-            # Quaternion derivative: dq/dt = 0.5 * Omega(omega) * q
+            # Quaternion derivative: dq/dt =0 0.5 * Omega(omega) * q
             wx, wy, wz = omega
             omega_matrix = 0.5 * np.array([
-                    [0, -wx, -wy, -wz],
-                    [wx, 0, wz, -wy],
-                    [wy, -wz, 0, wx],
-                    [wz, wy, -wx, 0],
-                    ],
-                    )
+                [0,  -wx, -wy, -wz],
+                [wx,   0,  wz, -wy],
+                [wy, -wz,   0,  wx],
+                [wz,  wy, -wx,   0]
+            ])
             self.quaternion = self.quaternion + omega_matrix @ self.quaternion * dt
             # Normalize quaternion
             q_norm = np.linalg.norm(self.quaternion)
@@ -67,7 +67,7 @@ class Spacecraft:
         m = float(self.mass.value)
         r = 2.0  # assumed radius in meters
         I = (2.0 / 5.0) * m * r ** 2
-        self.inertia_tensor = np.eye(3) * I
+        self.rotation.inertia_tensor = np.eye(3) * I
 
         # Current torque: astropy Quantity
         self._current_torque = np.zeros(3) * u.N * u.m
@@ -93,3 +93,19 @@ class Spacecraft:
     def get_angular_velocity_str(self) -> str:
         """Return angular velocity as a formatted string."""
         return np.array2string(self.rotation.angular_velocity, precision=6, suppress_small=True)
+
+    @property
+    def inertia_tensor(self):
+        return self.rotation.inertia_tensor
+
+    @property
+    def state(self):
+        return {        'name'                 : self.name,
+                        'position_m'           : self.orbit.r,
+                        'velocity_ms'          : self.orbit.v,
+                        'mass_kg'              : self.mass.to(u.kg).value,
+                        'angular_velocity_rads': self.rotation.angular_velocity,
+                        'quaternion'           : self.rotation.quaternion,
+                        'inertia_tensor'       : self.rotation.inertia_tensor,
+                        'orbit'                : self.orbit
+                        }

@@ -1,216 +1,139 @@
+#!/usr/bin/python
 # ui/panels/mfd.py
 
-from enum import auto, Enum
-
 import pygame
-
-from ui.colors import Colors
+from enum import Enum, auto
+from ui.panel_base import PanelBase
 
 
 class MFDMode(Enum):
-    ORBIT = auto()
-    NAV = auto()
+    ORBIT   = auto()
+    NAV     = auto()
     SYSTEMS = auto()
-    MAP = auto()
+    ATTITUDE = auto()
 
 
-class MFD:
+class MFD(PanelBase):
     """
     Multi-Function Display panel.
-
-    Displays a selectable set of readout pages.
-    Buttons along the bottom cycle through modes.
+    Cycle modes with OSB (On-Screen Button) style buttons along edges.
     """
 
-    MODES = [MFDMode.ORBIT, MFDMode.NAV, MFDMode.SYSTEMS, MFDMode.MAP]
+    MODES = list(MFDMode)
     MODE_LABELS = {
-            MFDMode.ORBIT  : 'ORB',
-            MFDMode.NAV    : 'NAV',
-            MFDMode.SYSTEMS: 'SYS',
-            MFDMode.MAP    : 'MAP',
-            }
+        MFDMode.ORBIT:    "ORB",
+        MFDMode.NAV:      "NAV",
+        MFDMode.SYSTEMS:  "SYS",
+        MFDMode.ATTITUDE: "ATT",
+    }
 
-    BUTTON_HEIGHT = 28
+    OSB_SIZE = 30
+    OSB_MARGIN = 4
 
-    def __init__(self, rect: pygame.Rect, side: str = 'left'):
-        self.rect = rect
-        self.side = side
-        self.surface = pygame.Surface((rect.width, rect.height))
-        self._mode = MFDMode.ORBIT
-        self._state_snapshot = {}
-        self._selected_spacecraft = None
-        self._button_rects = []
+    def __init__(self, screen, rect, api, label="MFD"):
+        super().__init__(screen, rect, api)
+        self.label = label
+        self.mode = MFDMode.ORBIT
+        self._osb_rects = []
 
-        pygame.font.init()
-        self._font = pygame.font.SysFont('monospace', 12)
-        self._font_title = pygame.font.SysFont('monospace', 13, bold=True)
-        self._font_small = pygame.font.SysFont('monospace', 10)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def update(self, state: dict) -> None:
-        self._state_snapshot = state
-        if self._selected_spacecraft is None:
-            names = list(state.get('spacecraft', {}).keys())
-            if names:
-                self._selected_spacecraft = names[0]
-
-    def draw(self) -> pygame.Surface:
-        self.surface.fill(Colors.PANEL_BG)
-        self._draw_border()
-        self._draw_title()
+    def render(self) -> None:
+        self.clear()
+        self.draw_border()
+        self._draw_header()
+        self._draw_osbs()
         self._draw_content()
-        self._draw_mode_buttons()
-        return self.surface
+        self._draw_orbit_data()
+        self._draw_nav_data()
+        self._draw_systems_data()
+        self._draw_attitude_data()
 
-    def handle_event(self, event: pygame.event) -> None:
+    def _draw_header(self) -> None:
+        self.draw_label(
+            f"{self.label} [{self.MODE_LABELS[self.mode]}]",
+            6, 4, font=self.FONT_MONO_SM, color=self.COLOR_ACCENT
+        )
+
+    def _draw_osbs(self) -> None:
+        """Draw mode-select buttons along the bottom edge."""
+        self._osb_rects.clear()
+        n = len(self.MODES)
+        spacing = self.rect.width // n
+        y = self.rect.height - self.OSB_SIZE - self.OSB_MARGIN
+        for i, mode in enumerate(self.MODES):
+            x = i * spacing + self.OSB_MARGIN
+            r = pygame.Rect(x, y, self.OSB_SIZE + 10, self.OSB_SIZE)
+            color = self.COLOR_ACCENT if mode == self.mode else self.COLOR_BORDER
+            pygame.draw.rect(self.surface, color, r, 1)
+            self.draw_label(
+                self.MODE_LABELS[mode],
+                r.x + 4, r.y + 6,
+                font=self.FONT_MONO_SM, color=color
+            )
+            self._osb_rects.append((r, mode))
+
+    def _draw_content(self) -> None:
+        if self.mode == MFDMode.ORBIT:
+            self._draw_orbit_data()
+        elif self.mode == MFDMode.NAV:
+            self._draw_nav_data()
+        elif self.mode == MFDMode.SYSTEMS:
+            self._draw_systems_data()
+        elif self.mode == MFDMode.ATTITUDE:
+            self._draw_attitude_data()
+
+    def _draw_orbit_data(self) -> None:
+        state = self.api.get_system_state()
+        spacecraft = state.get('spacecraft', {})
+        y = 30
+        for name, data in spacecraft.items():
+            self.draw_label(name, 6, y, color=self.COLOR_ACCENT)
+            y += 18
+            pos = data.get('position_m', [0, 0, 0])
+            vel = data.get('velocity_ms', [0, 0, 0])
+            r_km = (sum(p**2 for p in pos)**0.5) / 1000
+            v_ms = (sum(v**2 for v in vel)**0.5)
+            self.draw_label(f"R: {r_km:>10.1f} km", 6, y,
+                            font=self.FONT_MONO_SM)
+            y += 16
+            self.draw_label(f"V: {v_ms:>10.1f} m/s", 6, y,
+                            font=self.FONT_MONO_SM)
+            y += 20
+
+    def _draw_nav_data(self) -> None:
+        self.draw_label("NAV - TBD", 6, 40,
+                        font=self.FONT_MONO_SM, color=self.COLOR_TEXT_DIM)
+
+    def _draw_systems_data(self) -> None:
+        state = self.api.get_system_state()
+        spacecraft = state.get('spacecraft', {})
+        y = 30
+        for name, data in spacecraft.items():
+            self.draw_label(name, 6, y, color=self.COLOR_ACCENT)
+            y += 18
+            mass = data.get('mass_kg', 0)
+            self.draw_label(f"MASS: {mass:.1f} kg", 6, y,
+                            font=self.FONT_MONO_SM)
+            y += 16
+
+    def _draw_attitude_data(self) -> None:
+        state = self.api.get_system_state()
+        spacecraft = state.get('spacecraft', {})
+        y = 30
+        for name, data in spacecraft.items():
+            self.draw_label(name, 6, y, color=self.COLOR_ACCENT)
+            y += 18
+            omega = data.get('angular_velocity_rads', [0, 0, 0])
+            for axis, val in zip(['ωx', 'ωy', 'ωz'], omega):
+                self.draw_label(f"{axis}: {val:+.4f} r/s", 6, y,
+                                font=self.FONT_MONO_SM)
+                y += 16
+            y += 4
+
+    def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             lx = event.pos[0] - self.rect.x
             ly = event.pos[1] - self.rect.y
-            for i, r in enumerate(self._button_rects):
+            for r, mode in self._osb_rects:
                 if r.collidepoint(lx, ly):
-                    self._mode = self.MODES[i % len(self.MODES)]
-
-    # ------------------------------------------------------------------
-    # Drawing
-    # ------------------------------------------------------------------
-
-    def _draw_border(self) -> None:
-        pygame.draw.rect(self.surface, Colors.PANEL_BORDER,
-                         self.surface.get_rect(), 2,
-                         )
-
-    def _draw_title(self) -> None:
-        label = f"[ {self.side.upper()} MFD — {self.MODE_LABELS[self._mode]} ]"
-        surf = self._font_title.render(label, True, Colors.CYAN)
-        self.surface.blit(surf, (8, 6))
-        pygame.draw.line(self.surface, Colors.PANEL_BORDER,
-                         (4, 22), (self.rect.width - 4, 22), 1,
-                         )
-
-    def _draw_content(self) -> None:
-        content_rect = pygame.Rect(
-                4, 26,
-                self.rect.width - 8,
-                self.rect.height - 26 - self.BUTTON_HEIGHT - 4,
-                )
-        if self._mode == MFDMode.ORBIT:
-            self._draw_orbit_page(content_rect)
-        elif self._mode == MFDMode.NAV:
-            self._draw_nav_page(content_rect)
-        elif self._mode == MFDMode.SYSTEMS:
-            self._draw_systems_page(content_rect)
-        elif self._mode == MFDMode.MAP:
-            self._draw_map_page(content_rect)
-
-    def _draw_orbit_page(self, rect: pygame.Rect) -> None:
-        sc_data = self._state_snapshot.get('spacecraft', {})
-        if not sc_data or self._selected_spacecraft not in sc_data:
-            self._print_lines(rect, ['No spacecraft'], Colors.DIM_WHITE)
-            return
-        sc = sc_data[self._selected_spacecraft]
-        pos = sc['position_m']
-        vel = sc['velocity_ms']
-        r_km = (sum(x ** 2 for x in pos) ** 0.5) / 1000
-        v_ms = (sum(x ** 2 for x in vel) ** 0.5)
-        lines = [
-                f"SC: {self._selected_spacecraft}",
-                "",
-                f"ALT  {r_km - 6371:.1f} km",
-                f"RAD  {r_km:.1f} km",
-                f"SPD  {v_ms:.1f} m/s",
-                "",
-                f"PX   {pos[0] / 1000:.1f} km",
-                f"PY   {pos[1] / 1000:.1f} km",
-                f"PZ   {pos[2] / 1000:.1f} km",
-                "",
-                f"VX   {vel[0]:.2f} m/s",
-                f"VY   {vel[1]:.2f} m/s",
-                f"VZ   {vel[2]:.2f} m/s",
-                "",
-                f"MASS {sc['mass_kg']:.1f} kg",
-                ]
-        self._print_lines(rect, lines, Colors.GREEN)
-
-    def _draw_nav_page(self, rect: pygame.Rect) -> None:
-        sc_data = self._state_snapshot.get('spacecraft', {})
-        if not sc_data or self._selected_spacecraft not in sc_data:
-            self._print_lines(rect, ['No spacecraft'], Colors.DIM_WHITE)
-            return
-        sc = sc_data[self._selected_spacecraft]
-        av = sc['angular_velocity_rads']
-        q = sc['quaternion']
-        lines = [
-                "ATTITUDE",
-                "",
-                f"QW   {q[0]:.4f}",
-                f"QX   {q[1]:.4f}",
-                f"QY   {q[2]:.4f}",
-                f"QZ   {q[3]:.4f}",
-                "",
-                "ANG VEL (rad/s)",
-                f"WX   {av[0]:.4f}",
-                f"WY   {av[1]:.4f}",
-                f"WZ   {av[2]:.4f}",
-                ]
-        self._print_lines(rect, lines, Colors.AMBER)
-
-    def _draw_systems_page(self, rect: pygame.Rect) -> None:
-        lines = [
-                "SYSTEMS",
-                "",
-                "PWR   [NOMINAL]",
-                "PROP  [NOMINAL]",
-                "ADCS  [NOMINAL]",
-                "COMM  [NOMINAL]",
-                "",
-                "(placeholder)",
-                ]
-        self._print_lines(rect, lines, Colors.BRIGHT_GREEN)
-
-    def _draw_map_page(self, rect: pygame.Rect) -> None:
-        bodies = self._state_snapshot.get('bodies', {})
-        lines = ["BODIES"] + [""] + [
-                f"{n:<10} {self._r_au(d['position_m']):.3f} AU"
-                for n, d in bodies.items()
-                ]
-        self._print_lines(rect, lines, Colors.CYAN)
-
-    def _draw_mode_buttons(self) -> None:
-        self._button_rects = []
-        n = len(self.MODES)
-        bw = (self.rect.width - 8) // n
-        by = self.rect.height - self.BUTTON_HEIGHT - 2
-        for i, mode in enumerate(self.MODES):
-            r = pygame.Rect(4 + i * bw, by, bw - 2, self.BUTTON_HEIGHT)
-            self._button_rects.append(r)
-            active = (mode == self._mode)
-            bg = Colors.DIM_GREEN if active else Colors.DARK_GREY
-            pygame.draw.rect(self.surface, bg, r)
-            pygame.draw.rect(self.surface, Colors.PANEL_BORDER, r, 1)
-            lbl = self._font.render(self.MODE_LABELS[mode], True,
-                                    Colors.BRIGHT_GREEN if active else Colors.GREY,
-                                    )
-            self.surface.blit(lbl, (r.x + 4, r.y + 7))
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _print_lines(self, rect: pygame.Rect,
-                     lines: list, color,
-                     ) -> None:
-        line_h = 15
-        for i, line in enumerate(lines):
-            y = rect.y + i * line_h
-            if y + line_h > rect.y + rect.height:
-                break
-            surf = self._font.render(line, True, color)
-            self.surface.blit(surf, (rect.x, y))
-
-    @staticmethod
-    def _r_au(pos_m: list) -> float:
-        AU = 1.496e11
-        return (sum(x ** 2 for x in pos_m) ** 0.5) / AU
+                    self.mode = mode
+                    break

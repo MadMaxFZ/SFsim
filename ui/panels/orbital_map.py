@@ -1,81 +1,157 @@
+#!/usr/bin/python
 # ui/panels/orbital_map.py
 
 import pygame
 import numpy as np
-import logging
-from ui.colors import Colors
-
-# Astronomical unit in metres — used for default scale
-AU_M = 1.496e11
+from astropy import units as u
+from ui.panel_base import PanelBase
 
 
-class OrbitalMap:
+class OrbitalMap(PanelBase):
     """
-    2-D top-down ecliptic-plane map rendered into a pygame Surface.
-
-    Controls
-    --------
-    Mouse wheel      : zoom in / out
-    Middle-drag      : pan
-    Left-click body  : select / focus
+    2D top-down ecliptic plane view of the solar system.
+    Supports zoom and pan. Bodies rendered as colored dots with labels.
+    Spacecraft rendered with velocity vector indicator.
     """
 
-    MIN_SCALE = 1e-12  # px / m
-    MAX_SCALE = 1e-6
+    BODY_COLORS = {
+        'Mercury': (180, 140, 100),
+        'Venus':   (220, 200, 100),
+        'Earth':   ( 80, 140, 220),
+        'Moon':    (180, 180, 180),
+        'Mars':    (200,  80,  60),
+        'Jupiter': (200, 160, 120),
+        'Saturn':  (220, 200, 140),
+        'Uranus':  (140, 200, 220),
+        'Neptune': ( 80, 100, 220),
+    }
 
-    def __init__(self, rect: pygame.Rect):
-        self.rect = rect
-        self.surface = pygame.Surface((rect.width, rect.height))
+    BODY_RADIUS_PX = {
+        'Sun':     8,
+        'Earth':   4,
+        'Moon':    2,
+        'default': 3,
+    }
 
-        # View state
-        self._scale = 1.5e-9  # pixels per metre (shows inner solar system)
-        self._offset = np.array([rect.width / 2, rect.height / 2], dtype=float)
+    AU_TO_KM = 1.496e08  # kilometers per AU
+
+    def __init__(self, screen, rect, api):
+        super().__init__(screen, rect, api)
+        # Default view: 6 AU across the map width
+        self.view_au = 6.0
+        self.center_offset = np.array([0.0, 0.0])  # pan offset in AU
         self._dragging = False
         self._drag_start = None
-        self._offset_start = None
 
-        self._selected_body = None
-        self._state_snapshot = {}
+    @property
+    def scale(self) -> float:
+        """Pixels per AU."""
+        return self.rect.width / self.view_au
 
-        # Font
-        pygame.font.init()
-        self._font_small = pygame.font.SysFont('monospace', 11)
-        self._font_label = pygame.font.SysFont('monospace', 13, bold=True)
+    def world_to_screen(self, x_m: float, y_m: float):
+        """Convert meters (heliocentric) to screen pixel coords."""
+        # if type(x_m) == type(1 * u.s):
+        #     x_m = x_m.value
+        # if type(y_m) == type(1 * u.s):
+        #     y_m = y_m.value
+        x_au = x_m.to(u.AU).value
+        y_au = y_m.to(u.AU).value
+        cx = self.rect.width / 2 + self.center_offset[0] * self.scale
+        cy = self.rect.height / 2 + self.center_offset[1] * self.scale
+        px = cx + x_au * self.scale
+        py = cy - y_au * self.scale # y flipped for screen coords
+        pass
+        return int(px), int(py)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def update(self, state: dict) -> None:
-        """Accept a fresh state snapshot from the API."""
-        self._state_snapshot = state
-
-    def draw(self) -> pygame.Surface:
-        """Render and return the panel surface."""
-        self.surface.fill(Colors.PANEL_BG)
+    def render(self) -> None:
+        self.clear()
         self._draw_grid()
         self._draw_sun()
         self._draw_bodies()
         self._draw_spacecraft()
-        self._draw_hud_overlay()
-        return self.surface
+        self.draw_border()
+        self._draw_scale_indicator()
 
-    def handle_event(self, event: pygame.event) -> None:
-        """Handle mouse events (coordinates relative to the main window)."""
+    def _draw_grid(self) -> None:
+        """Concentric AU rings."""
+        cx = self.rect.width // 2 + int(self.center_offset[0] * self.scale)
+        cy = self.rect.height // 2 + int(self.center_offset[1] * self.scale)
+        for r_au in [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]:
+            r_px = int(r_au * self.scale)
+            pygame.draw.circle(self.surface, self.COLOR_GRID,
+                               (cx, cy), r_px, 1)
+
+    def _draw_sun(self) -> None:
+        cx = self.rect.width // 2 + int(self.center_offset[0] * self.scale)
+        cy = self.rect.height // 2 + int(self.center_offset[1] * self.scale)
+        pygame.draw.circle(self.surface, (255, 220, 60), (cx, cy), 8)
+        pygame.draw.circle(self.surface, (255, 255, 120), (cx, cy), 4)
+
+    def _draw_bodies(self) -> None:
+        state = self.api.get_system_state()
+        bodies = state.get('bodies', {})
+        for name, data in bodies.items():
+            pos = data.get('position_km')
+            if pos is None:
+                continue
+            x, y = self.world_to_screen(pos[0], pos[1])
+            if not (0 <= x < self.rect.width and 0 <= y < self.rect.height):
+                continue
+            color = self.BODY_COLORS.get(name, (200, 200, 200))
+            r = self.BODY_RADIUS_PX.get(name, self.BODY_RADIUS_PX['default'])
+            pygame.draw.circle(self.surface, color, (x, y), r)
+            self.draw_label(name, x + r + 2, y - 6,
+                            font=self.FONT_MONO_SM,
+                            color=self.COLOR_TEXT_DIM)
+
+    def _draw_spacecraft(self) -> None:
+        state = self.api.get_system_state()
+        spacecraft = state.get('spacecraft', {})
+        for name, data in spacecraft.items():
+            pos = data.get('position_km')
+            if pos is None:
+                continue
+            x, y = self.world_to_screen(pos[0], pos[1])
+            if not (0 <= x < self.rect.width and 0 <= y < self.rect.height):
+                continue
+            # Draw diamond marker
+            size = 5
+            points = [(x, y - size), (x + size, y),
+                      (x, y + size), (x - size, y)]
+            pygame.draw.polygon(self.surface, self.COLOR_ACCENT, points, 1)
+            self.draw_label(name, x + size + 2, y - 6,
+                            font=self.FONT_MONO_SM,
+                            color=self.COLOR_ACCENT)
+
+    def _draw_scale_indicator(self) -> None:
+        """Draw a 1 AU scale bar in the bottom-left corner."""
+        bar_au = 1.0
+        bar_px = int(bar_au * self.scale)
+        x0 = 20
+        y0 = self.rect.height - 20
+        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM,
+                         (x0, y0), (x0 + bar_px, y0), 1)
+        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM,
+                         (x0, y0 - 4), (x0, y0 + 4), 1)
+        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM,
+                         (x0 + bar_px, y0 - 4), (x0 + bar_px, y0 + 4), 1)
+        self.draw_label("1 AU", x0 + bar_px // 2 - 12, y0 - 18,
+                        font=self.FONT_MONO_SM, color=self.COLOR_TEXT_DIM)
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        # Translate event coords to panel-local coords
         if event.type == pygame.MOUSEBUTTONDOWN:
-            lx, ly = self._to_local(event.pos)
-            if not self._in_bounds(lx, ly):
+            lx = event.pos[0] - self.rect.x
+            ly = event.pos[1] - self.rect.y
+            if not (0 <= lx < self.rect.width and 0 <= ly < self.rect.height):
                 return
-            if event.button == 4:  # wheel up
-                self._zoom(1.15, lx, ly)
-            elif event.button == 5:  # wheel down
-                self._zoom(1 / 1.15, lx, ly)
-            elif event.button == 2:  # middle button
+            if event.button == 4:  # scroll up — zoom in
+                self.view_au = max(0.1, self.view_au * 0.9)
+            elif event.button == 5:  # scroll down — zoom out
+                self.view_au = min(60.0, self.view_au * 1.1)
+            elif event.button == 2:  # middle click — pan start
                 self._dragging = True
-                self._drag_start = np.array([lx, ly], dtype=float)
-                self._offset_start = self._offset.copy()
-            elif event.button == 1:
-                self._try_select(lx, ly)
+                self._drag_start = (lx, ly)
 
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 2:
@@ -83,135 +159,9 @@ class OrbitalMap:
 
         elif event.type == pygame.MOUSEMOTION:
             if self._dragging:
-                lx, ly = self._to_local(event.pos)
-                delta = np.array([lx, ly], dtype=float) - self._drag_start
-                self._offset = self._offset_start + delta
-
-    # ------------------------------------------------------------------
-    # Drawing helpers
-    # ------------------------------------------------------------------
-
-    def _draw_grid(self) -> None:
-        """Draw faint concentric AU rings."""
-        for au in [0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0]:
-            r_px = int(au * AU_M * self._scale)
-            cx, cy = int(self._offset[0]), int(self._offset[1])
-            if r_px < 2 or r_px > 8000:
-                continue
-            pygame.draw.circle(self.surface, Colors.GRID_LINE, (cx, cy), r_px, 1)
-            label = self._font_small.render(f"{au}AU", True, Colors.GREY)
-            self.surface.blit(label, (cx + r_px + 2, cy))
-
-    def _draw_sun(self) -> None:
-        cx, cy = int(self._offset[0]), int(self._offset[1])
-        pygame.draw.circle(self.surface, Colors.SUN_COLOR, (cx, cy), 6)
-        glow = pygame.Surface((30, 30), pygame.SRCALPHA)
-        pygame.draw.circle(glow, (255, 220, 80, 40), (15, 15), 15)
-        self.surface.blit(glow, (cx - 15, cy - 15))
-
-    def _draw_bodies(self) -> None:
-        bodies = self._state_snapshot.get('bodies', {})
-        for name, data in bodies.items():
-            pos_m = np.array(data['position_m'])
-            px, py = self._world_to_screen(pos_m)
-            if not self._in_bounds(px, py):
-                continue
-            color = Colors.BODY_COLORS.get(name, Colors.WHITE)
-            radius = 4 if name not in ('Moon',) else 2
-            if name == self._selected_body:
-                pygame.draw.circle(self.surface, Colors.BRIGHT_CYAN,
-                                   (int(px), int(py)), radius + 3, 1,
-                                   )
-            pygame.draw.circle(self.surface, color, (int(px), int(py)), radius)
-            lbl = self._font_label.render(name, True, color)
-            self.surface.blit(lbl, (int(px) + radius + 2, int(py) - 6))
-
-    def _draw_spacecraft(self) -> None:
-        spacecraft = self._state_snapshot.get('spacecraft', {})
-        for name, data in spacecraft.items():
-            pos_m = np.array(data['position_m'])
-            px, py = self._world_to_screen(pos_m)
-            if not self._in_bounds(px, py):
-                continue
-            # Draw a small triangle marker
-            tip = (int(px), int(py) - 7)
-            bl = (int(px) - 5, int(py) + 4)
-            br = (int(px) + 5, int(py) + 4)
-            pygame.draw.polygon(self.surface, Colors.SPACECRAFT_COLOR, [tip, bl, br], 1)
-            lbl = self._font_label.render(name, True, Colors.SPACECRAFT_COLOR)
-            self.surface.blit(lbl, (int(px) + 8, int(py) - 6))
-
-    def _draw_hud_overlay(self) -> None:
-        """Scale bar and zoom level."""
-        bar_m = self._round_scale_bar()
-        bar_px = int(bar_m * self._scale)
-        if 40 < bar_px < self.rect.width // 3:
-            x0 = 20
-            y0 = self.rect.height - 25
-            pygame.draw.line(self.surface, Colors.DIM_WHITE,
-                             (x0, y0), (x0 + bar_px, y0), 2,
-                             )
-            pygame.draw.line(self.surface, Colors.DIM_WHITE,
-                             (x0, y0 - 4), (x0, y0 + 4), 2,
-                             )
-            pygame.draw.line(self.surface, Colors.DIM_WHITE,
-                             (x0 + bar_px, y0 - 4), (x0 + bar_px, y0 + 4), 2,
-                             )
-            label_text = self._format_distance(bar_m)
-            lbl = self._font_small.render(label_text, True, Colors.DIM_WHITE)
-            self.surface.blit(lbl, (x0, y0 - 16))
-
-    # ------------------------------------------------------------------
-    # Coordinate helpers
-    # ------------------------------------------------------------------
-
-    def _world_to_screen(self, pos_m: np.ndarray):
-        """Convert 3-D world position (m) to 2-D screen pixel coords."""
-        x = pos_m[0] * self._scale + self._offset[0]
-        y = -pos_m[1] * self._scale + self._offset[1]  # flip y
-        return x, y
-
-    def _to_local(self, window_pos):
-        return window_pos[0] - self.rect.x, window_pos[1] - self.rect.y
-
-    def _in_bounds(self, lx, ly) -> bool:
-        return 0 <= lx < self.rect.width and 0 <= ly < self.rect.height
-
-    def _zoom(self, factor: float, cx: float, cy: float) -> None:
-        new_scale = np.clip(self._scale * factor, self.MIN_SCALE, self.MAX_SCALE)
-        # Zoom toward cursor
-        self._offset[0] = cx + (self._offset[0] - cx) * (new_scale / self._scale)
-        self._offset[1] = cy + (self._offset[1] - cy) * (new_scale / self._scale)
-        self._scale = new_scale
-
-    def _try_select(self, lx: float, ly: float) -> None:
-        best_name = None
-        best_dist = 12  # pixel threshold
-        for name, data in self._state_snapshot.get('bodies', {}).items():
-            pos_m = np.array(data['position_m'])
-            px, py = self._world_to_screen(pos_m)
-            d = np.hypot(lx - px, ly - py)
-            if d < best_dist:
-                best_dist = d
-                best_name = name
-        self._selected_body = best_name
-
-    def _round_scale_bar(self) -> float:
-        """Return a 'nice' distance in metres for the scale bar."""
-        target_px = 100
-        raw_m = target_px / self._scale
-        exp = 10 ** np.floor(np.log10(raw_m))
-        for factor in [1, 2, 5, 10]:
-            if factor * exp * self._scale >= 40:
-                return factor * exp
-        return raw_m
-
-    @staticmethod
-    def _format_distance(metres: float) -> str:
-        au = metres / AU_M
-        if au >= 0.1:
-            return f"{au:.2f} AU"
-        km = metres / 1000
-        if km >= 1000:
-            return f"{km / 1000:.0f} Mm"
-        return f"{km:.0f} km"
+                lx = event.pos[0] - self.rect.x
+                ly = event.pos[1] - self.rect.y
+                dx = (lx - self._drag_start[0]) / self.scale
+                dy = -(ly - self._drag_start[1]) / self.scale
+                self.center_offset += np.array([dx, dy])
+                self._drag_start = (lx, ly)
