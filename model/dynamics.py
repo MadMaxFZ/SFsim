@@ -80,18 +80,26 @@ def max_step(r_rel: np.ndarray, mu_d: float, fraction: float) -> float:
     return fraction * 2 * np.pi * np.sqrt(rn ** 3 / mu_d)
 
 
-def propagate_free(solar, r, v, t, duration, fraction=0.01, max_steps=4000, sample_every=1, target=None):
+def propagate_free(solar, r, v, t, duration, fraction=0.01, max_steps=4000,
+                   sample_every=1, target=None, stop_at_target=False):
     """
     Coast prediction (no thrust). Returns list of (t, r_helio, v_helio, dominant).
     If `target` is given, steps are shortened while approaching its SOI so
     encounters are not stepped over.
-    Used by the trajectory predictor and navigation instruments.
+    With `stop_at_target`, include the first sample inside the target SOI
+    and stop, even if it falls between regular sample points.
     """
     out = [(t, r.copy(), v.copy(), solar.dominant_body(r, t))]
     t_end = t + duration
     steps = 0
     while t < t_end and steps < max_steps:
         dom = solar.dominant_body(r, t)
+        if stop_at_target and target is not None and dom == target:
+            if out[-1][0] == t:
+                out[-1] = (t, r.copy(), v.copy(), dom)
+            else:
+                out.append((t, r.copy(), v.copy(), dom))
+            break
         st0 = solar.states(t)
         r_rel, v_rel = r - st0[dom][0], v - st0[dom][1]
         if np.linalg.norm(r_rel) < BODIES[dom][1]:
@@ -107,6 +115,9 @@ def propagate_free(solar, r, v, t, duration, fraction=0.01, max_steps=4000, samp
         st1 = solar.states(t)
         r, v = r_rel + st1[dom][0], v_rel + st1[dom][1]
         steps += 1
+        if stop_at_target and target is not None and solar.dominant_body(r, t) == target:
+            out.append((t, r.copy(), v.copy(), target))
+            break
         if steps % sample_every == 0:
             out.append((t, r.copy(), v.copy(), dom))
     return out

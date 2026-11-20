@@ -1,5 +1,7 @@
 # SFsim
 
+[![Tests](https://github.com/MadMaxFZ/SFsim/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/MadMaxFZ/SFsim/actions/workflows/tests.yml)
+
 Experimental spaceflight simulator: an instrumented ship that can navigate the
 solar system, flown by a pilot together with a ShipAI (the ship's operating system).
 
@@ -9,7 +11,7 @@ solar system, flown by a pilot together with a ShipAI (the ship's operating syst
 pip install -r requirements.txt
 python sim_app.py                       # 400 km orbit about Earth, epoch 2026-01-01
 python sim_app.py --epoch 2026-11-20    # start near the 2026 Mars departure window
-python tools/headless_mission.py        # scripted LEO -> Mars ejection, no display
+python tools/headless_mission.py        # scripted LEO -> Mars capture, no display
 python -m pytest -q tests               # physics / autopilot tests
 ```
 
@@ -84,6 +86,7 @@ called inside every sub-step for throttle, programs and attitude) `-> Telemetry.
 1. Target Mars (TAB). Open the NAV page and warp until `WAIT` is near 0 (the phase angle matches the required angle).
 2. Press `J`. ShipAI holds prograde, waits for `EJ` to reach `EJreq`, then executes the ejection burn.
 3. After the SOI change to the Sun, NAV shows the predicted encounter or closest approach. Press `T`
-   a few days out for a first correction, then again about 30 days before arrival to refine the
-   periapsis (the headless mission reaches a ~550 x 640 km Mars orbit this way).
+   a few days out for an initial correction. The solver refines its estimate using the target's
+   gravity. Check the predicted periapsis after the burn and use `T` again closer to arrival
+   if needed. The 300 km target is the incoming periapsis, not the post-capture orbit altitude.
 4. Inside Mars' SOI, press `P` to capture and circularise at periapsis.
