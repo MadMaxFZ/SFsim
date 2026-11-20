@@ -1,0 +1,1219 @@
+```text
+/home/madmaxfz/PycharmProjects/SFsim/example.py
+```python
+from model import SpaceflightSimAPI
+from poliastro.bodies import Earth, Mars
+from poliastro.twobody import Orbit
+from astropy import units as u
+import numpy as np
+import logging
+import time
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+
+def test_basic_functionality():
+    """Test basic simulation functionality."""
+    print("\n=== Testing Basic Functionality ===")
+    api = SpaceflightSimAPI()
+
+    # Add spacecraft
+    initial_orbit = Orbit.circular(Earth, alt=400 * u.km)
+    api.add_spacecraft("Voyager", initial_orbit, mass=722 * u.kg)
+
+    # Propagate
+    api.propagate_system(1 * u.hour)
+
+    # Get state
+    state = api.get_spacecraft_state("Voyager")
+    print(f"Position: {state.position} km")
+    print(f"Velocity: {state.velocity} km/s")
+    print(f"Mass: {state.mass} kg")
+
+    return api
+
+
+def test_maneuvers(api):
+    """Test spacecraft maneuvers."""
+    print("\n=== Testing Maneuvers ===")
+
+    # Apply maneuver
+    api.apply_spacecraft_maneuver("Voyager", np.array([0.1, 0.1, 0.0]))
+    state = api.get_spacecraft_state("Voyager")
+    print(f"New velocity: {state.velocity} km/s")
+    print(f"New mass: {state.mass} kg")
+
+
+def test_solar_system(api):
+    """Test solar system functionality."""
+    print("\n=== Testing Solar System ===")
+
+    # Test body states
+    earth_state = api.get_body_state("Earth")
+    print(f"Earth position: {earth_state.position} km")
+    print(f"Earth velocity: {earth_state.velocity} km/s")
+
+    # Test relative positions
+    rel_pos = api.get_relative_position("Earth", "Moon")
+    print(f"Earth-Moon distance: {np.linalg.norm(rel_pos):.0f} km")
+
+
+def test_performance():
+    """Test simulation performance."""
+    print("\n=== Testing Performance ===")
+    api = SpaceflightSimAPI()
+
+    # Add multiple spacecraft
+    for i in range(5):
+        orbit = Orbit.circular(Earth, alt=(400 + i*50) * u.km)
+        api.add_spacecraft(f"Sat{i}", orbit, mass=500 * u.kg)
+
+    # Time propagation
+    start_time = time.time()
+    api.propagate_system(1 * u.day)
+    elapsed = time.time() - start_time
+
+    print(f"Propagated 5 spacecraft for 1 day in {elapsed:.4f} seconds")
+    print(f"Simulation time: {api.simulation_time}")
+
+
+def main():
+    """Run all tests."""
+    api = test_basic_functionality()
+    test_maneuvers(api)
+    test_solar_system(api)
+    test_performance()
+
+
+if __name__ == "__main__":
+    main()
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/example_control.py
+```python
+import logging
+import numpy as np
+from astropy import units as u
+from astropy.time import Time
+
+from model.api import SpaceflightSimAPI
+from model.spacecraft import Spacecraft
+from poliastro.bodies import Earth
+from poliastro.twobody import Orbit
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(message)s')
+
+
+def attitude_control_hook(time_step: u.Quantity, spacecraft: Spacecraft) -> None:
+    """
+    Attitude control hook implementing damping with torque clamping.
+
+    Applies a damping torque proportional to angular velocity, but clamps
+    the torque magnitude so it cannot overshoot zero (reverse the spin).
+    This ensures monotonic convergence regardless of gain or time step size.
+
+    angular_velocity is a plain numpy array in rad/s.
+    Torque must be provided as an astropy Quantity in N*m.
+    """
+    kd = 50.0  # N*m / (rad/s) damping gain
+
+    # Moment of inertia (kg*m^2) - diagonal for a simple spacecraft model
+    inertia = np.array([100.0, 100.0, 100.0])  # kg*m^2
+
+    dt = time_step.to(u.s).value  # seconds
+
+    # angular_velocity is a plain numpy ndarray (rad/s)
+    current_omega = spacecraft.rotation.angular_velocity  # shape (3,), rad/s
+
+    # Compute unclamped damping torque
+    damping_torque = -kd * current_omega  # N*m values
+
+    # Clamp: torque cannot produce a larger delta_omega than needed to reach zero
+    # max_torque_mag per axis = I * |omega| / dt
+    max_torque = inertia * np.abs(current_omega) / dt
+    clamped_torque = np.sign(damping_torque) * np.minimum(np.abs(damping_torque), max_torque)
+
+    torque = clamped_torque * (u.N * u.m)
+
+    logging.info(
+        f"Attitude control: omega={np.array2string(current_omega, precision=4)} rad/s | "
+        f"torque={np.array2string(clamped_torque, precision=3)} N*m"
+    )
+    spacecraft.apply_torque(torque)
+
+
+def main():
+    # Initialize API with explicit epoch
+    epoch = Time.now().tdb
+    api = SpaceflightSimAPI(epoch=epoch)
+
+    # Create spacecraft in LEO
+    initial_orbit = Orbit.circular(Earth, alt=400 * u.km)
+    api.add_spacecraft(
+        name="Explorer",
+        orbit=initial_orbit,
+        mass=1000.0 * u.kg
+    )
+
+    # Give the spacecraft an initial angular velocity
+    api.spacecraft["Explorer"].rotation.angular_velocity = np.array([0.1, 0.05, -0.02])  # rad/s
+
+    # Register attitude control hook
+    api.register_spacecraft_hook(
+        spacecraft_name="Explorer",
+        callback=attitude_control_hook,
+        hook_type="pre_attitude_control"
+    )
+
+    # Simulation parameters
+    sim_duration = 10 * u.minute
+    time_step = 1 * u.minute
+
+    # Run simulation
+    current_time = 0.0 * u.s
+    while current_time < sim_duration:
+        api.propagate_system(time_step)
+        current_time = current_time + time_step
+
+        spacecraft = api.spacecraft["Explorer"]
+        omega = spacecraft.rotation.angular_velocity
+        speed = np.linalg.norm(omega)
+        logging.info(
+            f"t={current_time.to(u.s).value:.0f}s | "
+            f"omega={np.array2string(omega, precision=6, suppress_small=True)} rad/s | "
+            f"|omega|={speed:.6f} rad/s"
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/project_codestate.txt
+```python
+```text
+/home/madmaxfz/PycharmProjects/SFsim/example.py
+```python
+from model import SpaceflightSimAPI
+from poliastro.bodies import Earth, Mars
+from poliastro.twobody import Orbit
+from astropy import units as u
+import numpy as np
+import logging
+import time
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+
+def test_basic_functionality():
+    """Test basic simulation functionality."""
+    print("\n=== Testing Basic Functionality ===")
+    api = SpaceflightSimAPI()
+
+    # Add spacecraft
+    initial_orbit = Orbit.circular(Earth, alt=400 * u.km)
+    api.add_spacecraft("Voyager", initial_orbit, mass=722 * u.kg)
+
+    # Propagate
+    api.propagate_system(1 * u.hour)
+
+    # Get state
+    state = api.get_spacecraft_state("Voyager")
+    print(f"Position: {state.position} km")
+    print(f"Velocity: {state.velocity} km/s")
+    print(f"Mass: {state.mass} kg")
+
+    return api
+
+
+def test_maneuvers(api):
+    """Test spacecraft maneuvers."""
+    print("\n=== Testing Maneuvers ===")
+
+    # Apply maneuver
+    api.apply_spacecraft_maneuver("Voyager", np.array([0.1, 0.1, 0.0]))
+    state = api.get_spacecraft_state("Voyager")
+    print(f"New velocity: {state.velocity} km/s")
+    print(f"New mass: {state.mass} kg")
+
+
+def test_solar_system(api):
+    """Test solar system functionality."""
+    print("\n=== Testing Solar System ===")
+
+    # Test body states
+    earth_state = api.get_body_state("Earth")
+    print(f"Earth position: {earth_state.position} km")
+    print(f"Earth velocity: {earth_state.velocity} km/s")
+
+    # Test relative positions
+    rel_pos = api.get_relative_position("Earth", "Moon")
+    print(f"Earth-Moon distance: {np.linalg.norm(rel_pos):.0f} km")
+
+
+def test_performance():
+    """Test simulation performance."""
+    print("\n=== Testing Performance ===")
+    api = SpaceflightSimAPI()
+
+    # Add multiple spacecraft
+    for i in range(5):
+        orbit = Orbit.circular(Earth, alt=(400 + i*50) * u.km)
+        api.add_spacecraft(f"Sat{i}", orbit, mass=500 * u.kg)
+
+    # Time propagation
+    start_time = time.time()
+    api.propagate_system(1 * u.day)
+    elapsed = time.time() - start_time
+
+    print(f"Propagated 5 spacecraft for 1 day in {elapsed:.4f} seconds")
+    print(f"Simulation time: {api.simulation_time}")
+
+
+def main():
+    """Run all tests."""
+    api = test_basic_functionality()
+    test_maneuvers(api)
+    test_solar_system(api)
+    test_performance()
+
+
+if __name__ == "__main__":
+    main()
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/example_control.py
+```python
+import logging
+import numpy as np
+from astropy import units as u
+from astropy.time import Time
+
+from model.api import SpaceflightSimAPI
+from model.spacecraft import Spacecraft
+from poliastro.bodies import Earth
+from poliastro.twobody import Orbit
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(message)s')
+
+
+def attitude_control_hook(time_step: u.Quantity, spacecraft: Spacecraft) -> None:
+    """
+    Example attitude control hook.
+    Applies a damping torque proportional to angular velocity.
+
+    angular_velocity is a plain numpy array in rad/s.
+    Torque must be provided as an astropy Quantity in N*m.
+    """
+    kp = 10.0   # N*m / rad   (proportional gain, unused here)
+    kd = 50.0   # N*m / (rad/s) (derivative/damping gain)
+
+    # angular_velocity is a plain numpy ndarray (rad/s)
+    current_omega = spacecraft.rotation.angular_velocity  # shape (3,), rad/s
+
+    # Compute damping torque as plain float array, then attach units
+    damping_torque = -kd * current_omega  # N*m values
+
+    torque = damping_torque * (u.N * u.m)
+
+    logging.info(
+        f"Attitude control: Applying torque "
+        f"{np.array2string(torque.value, precision=3)} N*m to {spacecraft.name}"
+    )
+    spacecraft.apply_torque(torque)
+
+
+def main():
+    # Initialize API
+    epoch = Time.now().tdb
+    api = SpaceflightSimAPI(epoch=epoch)
+
+    # Create a spacecraft in LEO
+    leo_orbit = Orbit.circular(Earth, alt=400 * u.km)
+    api.add_spacecraft(
+        name="Explorer",
+        orbit=leo_orbit,
+        mass=1000.0 * u.kg
+    )
+
+    # Give the spacecraft an initial angular velocity so damping has something to do
+    api.spacecraft["Explorer"].rotation.angular_velocity = np.array([0.1, 0.05, -0.02])  # rad/s
+
+    # Register attitude control hook
+    api.register_spacecraft_hook(
+        spacecraft_name="Explorer",
+        callback=attitude_control_hook,
+        hook_type="pre_attitude_control"
+    )
+
+    # Simulation parameters
+    sim_duration = 10 * u.minute
+    time_step = 1 * u.minute
+
+    # Run simulation
+    current_time = 0.0 * u.s
+    while current_time < sim_duration:
+        api.propagate_system(time_step)
+        current_time = current_time + time_step
+
+        spacecraft = api.spacecraft["Explorer"]
+        omega = spacecraft.rotation.angular_velocity
+        omega_str = np.array2string(omega, precision=6, suppress_small=True)
+        logging.info(
+            f"Time: {current_time.to(u.s).value:.1f} s | "
+            f"Angular velocity: {omega_str} rad/s"
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/rotations.py
+```python
+"""Rotation and attitude dynamics module for spacecraft simulation."""
+
+import numpy as np
+from dataclasses import dataclass
+from typing import Tuple
+import astropy.units as u
+from numpy.linalg import inv
+
+@dataclass
+class Quaternion:
+    """Unit quaternion for 3D rotations."""
+    w: float  # Scalar component
+    x: float  # Vector components
+    y: float
+    z: float
+
+    def __post_init__(self):
+        """Normalize the quaternion to ensure it's a unit quaternion."""
+        norm = np.sqrt(self.w**2 + self.x**2 + self.y**2 + self.z**2)
+        self.w /= norm
+        self.x /= norm
+        self.y /= norm
+        self.z /= norm
+
+    def conjugate(self) -> 'Quaternion':
+        """Return the conjugate of this quaternion."""
+        return Quaternion(self.w, -self.x, -self.y, -self.z)
+
+def multiply_quaternions(q1: Quaternion, q2: Quaternion) -> Quaternion:
+    """Multiply two quaternions."""
+    w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
+    x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y
+    y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x
+    z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w
+    return Quaternion(w, x, y, z)
+
+class RotationState:
+    """Represents the rotational state of a rigid body."""
+
+    def __init__(self, orientation: Quaternion, angular_velocity: u.Quantity,
+                 inertia_tensor: np.ndarray):
+        """
+        Initialize rotation state.
+
+        Args:
+            orientation: Initial orientation as quaternion
+            angular_velocity: Initial angular velocity (rad/s)
+            inertia_tensor: 3x3 inertia tensor (kg·m²)
+        """
+        self.orientation = orientation
+        self.angular_velocity = angular_velocity.to(u.rad / u.s)
+        self.inertia_tensor = inertia_tensor
+
+    def propagate(self, time_step: u.s, torque: np.ndarray) -> None:
+        """
+        Propagate attitude dynamics forward in time with applied torque.
+
+        Args:
+            time_step: Time step for propagation (seconds)
+            torque: Applied torque in N·m (3-element array)
+        """
+        dt = time_step.to(u.s).value
+
+        # Convert angular velocity to rad/s for calculations
+        omega = self.angular_velocity.to(u.rad / u.s).value
+
+        # Euler's rotation equation: I*ω̇ + ω×(I*ω) = τ
+        omega_dot = np.dot(np.linalg.inv(self.inertia_tensor),
+                          torque - np.cross(omega, np.dot(self.inertia_tensor, omega)))
+
+        # Update angular velocity (first-order integration)
+        new_omega = omega + omega_dot * dt
+
+        # Update orientation using quaternion kinematics
+        omega_norm = np.linalg.norm(new_omega)
+        if omega_norm > 1e-10:  # Avoid division by zero
+            axis = new_omega / omega_norm
+            angle = omega_norm * dt
+            q_delta = Quaternion(
+                np.cos(angle/2),
+                axis[0] * np.sin(angle/2),
+                axis[1] * np.sin(angle/2),
+                axis[2] * np.sin(angle/2)
+            )
+            self.orientation = multiply_quaternions(q_delta, self.orientation)
+
+        # Update angular velocity (with units)
+        self.angular_velocity = new_omega * u.rad / u.s
+
+        # Renormalize quaternion to prevent drift
+        norm = np.sqrt(self.orientation.w**2 + self.orientation.x**2 +
+                      self.orientation.y**2 + self.orientation.z**2)
+        self.orientation = Quaternion(
+            self.orientation.w / norm,
+            self.orientation.x / norm,
+            self.orientation.y / norm,
+            self.orientation.z / norm
+        )
+
+
+
+def quaternion_to_euler(q: Quaternion) -> Tuple[float, float, float]:
+    """Convert quaternion to Euler angles (roll, pitch, yaw) in radians."""
+    # Roll (x-axis rotation)
+    sinr_cosp = 2 * (q.w * q.x + q.y * q.z)
+    cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2 * (q.w * q.y - q.z * q.x)
+    if abs(sinp) >= 1:
+        pitch = np.copysign(np.pi / 2, sinp)  # Use 90 degrees if out of range
+    else:
+        pitch = np.arcsin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/spacecraft.py
+```python
+import logging
+from dataclasses import dataclass, field
+
+import numpy as np
+from astropy import units as u
+from poliastro.twobody import Orbit
+
+
+@dataclass
+class SpacecraftRotation:
+    """Spacecraft rotational state."""
+    quaternion: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
+    angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))  # rad/s, plain array
+
+    def propagate(self, time_step: u.s, torque: u.Quantity, inertia_tensor: np.ndarray) -> None:
+        """
+        Propagate rotational state forward in time.
+
+        Args:
+            time_step: Time step for propagation
+            torque: Applied torque in N·m (astropy Quantity, shape (3,))
+            inertia_tensor: Moment of inertia tensor in kg·m² (plain numpy array, shape (3,3))
+        """
+        dt = float(time_step.to(u.s).value)
+
+        # torque values in N·m
+        tau = torque.to(u.N * u.m).value  # shape (3,), plain float array
+
+        # Angular acceleration: alpha = I^-1 * tau  (rad/s²)
+        I_inv = np.linalg.inv(inertia_tensor)
+        alpha = I_inv @ tau  # rad/s²
+
+        # Update angular velocity (plain float array, rad/s)
+        self.angular_velocity = self.angular_velocity + alpha * dt
+
+        # Update quaternion using first-order integration
+        omega = self.angular_velocity  # rad/s
+        omega_norm = float(np.linalg.norm(omega))
+
+        if omega_norm > 1e-10:
+            # Quaternion derivative: dq/dt = 0.5 * Omega(omega) * q
+            wx, wy, wz = omega
+            omega_matrix = 0.5 * np.array([
+                [0,  -wx, -wy, -wz],
+                [wx,   0,  wz, -wy],
+                [wy, -wz,   0,  wx],
+                [wz,  wy, -wx,   0]
+            ])
+            self.quaternion = self.quaternion + omega_matrix @ self.quaternion * dt
+            # Normalize quaternion
+            q_norm = np.linalg.norm(self.quaternion)
+            if q_norm > 1e-10:
+                self.quaternion = self.quaternion / q_norm
+
+
+class Spacecraft:
+    """Spacecraft model with orbital and rotational state."""
+
+    def __init__(self, name: str, orbit: Orbit, mass: u.Quantity):
+        self.name = name
+        self.orbit = orbit
+        self.mass = mass.to(u.kg)
+        self.rotation = SpacecraftRotation()
+
+        # Default inertia tensor: solid sphere approximation (kg·m²), plain numpy array
+        m = float(self.mass.value)
+        r = 2.0  # assumed radius in meters
+        I = (2.0 / 5.0) * m * r ** 2
+        self.inertia_tensor = np.eye(3) * I
+
+        # Current torque: astropy Quantity
+        self._current_torque = np.zeros(3) * u.N * u.m
+
+        logging.info(f"Initialized spacecraft {self.name} with mass {self.mass}")
+
+    def apply_torque(self, torque: u.Quantity) -> None:
+        """Apply torque to the spacecraft."""
+        if not torque.unit.is_equivalent(u.N * u.m):
+            raise ValueError(f"Torque must have units equivalent to N·m, got {torque.unit}")
+        if torque.shape != (3,):
+            raise ValueError(f"Torque must be a 3-element vector, got shape {torque.shape}")
+        self._current_torque = torque.to(u.N * u.m)
+
+    def propagate_orbit(self, time_step: u.s) -> None:
+        """Propagate orbital state forward in time."""
+        self.orbit = self.orbit.propagate(time_step)
+
+    def propagate_attitude(self, time_step: u.s) -> None:
+        """Propagate attitude state forward in time."""
+        self.rotation.propagate(time_step, self._current_torque, self.inertia_tensor)
+
+    def get_angular_velocity_str(self) -> str:
+        """Return angular velocity as a formatted string."""
+        return np.array2string(self.rotation.angular_velocity, precision=6, suppress_small=True)
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/api.py
+```python
+import logging
+from typing import Callable, Dict, Optional
+import numpy as np
+from astropy import units as u
+from poliastro.twobody import Orbit
+
+from model.spacecraft import Spacecraft
+from model.solar_system import SolarSystem
+
+class ControlHook:
+    """Wrapper for spacecraft control hooks."""
+
+    def __init__(self, callback: Callable, hook_type: str):
+        """
+        Initialize a control hook.
+
+        Args:
+            callback: Function to call (signature: func(time_step, spacecraft))
+            hook_type: Type of hook ('pre_attitude_control', 'post_attitude_control', etc.)
+        """
+        self.callback = callback
+        self.hook_type = hook_type
+
+    def __call__(self, time_step: u.s, spacecraft: Spacecraft):
+        """Execute the hook."""
+        return self.callback(time_step, spacecraft)
+
+class SpaceflightSimAPI:
+    """API for interacting with the spaceflight simulation model."""
+
+    def __init__(self):
+        """Initialize the simulation API."""
+        self.solar_system = SolarSystem()
+        self.spacecraft: Dict[str, Spacecraft] = {}
+        self.hooks: Dict[str, Dict[str, ControlHook]] = {}  # {spacecraft_name: {hook_type: hook}}
+        logging.info("SpaceflightSimAPI initialized with control hook system")
+
+    def add_spacecraft(self, name: str, orbit: Orbit, mass: u.kg = 1000 * u.kg) -> None:
+        """Add a spacecraft to the simulation."""
+        if name in self.spacecraft:
+            raise ValueError(f"Spacecraft {name} already exists")
+        self.spacecraft[name] = Spacecraft(name, orbit, mass)
+        self.hooks[name] = {}
+        logging.info(f"Added spacecraft {name} with mass {mass.value} kg")
+
+    def register_spacecraft_hook(self, spacecraft_name: str, hook: Callable, hook_type: str) -> None:
+        """Register a control hook for a spacecraft."""
+        if spacecraft_name not in self.spacecraft:
+            raise ValueError(f"Spacecraft {spacecraft_name} not found")
+
+        self.hooks[spacecraft_name][hook_type] = ControlHook(hook, hook_type)
+        logging.info(f"Registered spacecraft control hook: {hook_type}")
+
+    def propagate_system(self, time_step: u.s) -> None:
+        """Propagate the entire system forward in time."""
+        # Propagate solar system
+        self.solar_system.propagate(time_step)
+
+        # Propagate each spacecraft
+        for name, spacecraft in self.spacecraft.items():
+            # Execute pre-attitude control hooks
+            if "pre_attitude_control" in self.hooks[name]:
+                self.hooks[name]["pre_attitude_control"](time_step, spacecraft)
+
+            # Propagate attitude
+            spacecraft.propagate_attitude(time_step)
+
+            # Execute post-attitude control hooks
+            if "post_attitude_control" in self.hooks[name]:
+                self.hooks[name]["post_attitude_control"](time_step, spacecraft)
+
+            # Propagate orbit
+            spacecraft.propagate_orbit(time_step)
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/utils.py
+```python
+from astropy import units as u
+from astropy.time import Time
+
+
+def time_to_epoch(time: Time) -> u.Quantity:
+    """Convert an astropy Time object to an epoch (Julian date)."""
+    return time.jd * u.day
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/solar_system.py
+```python
+import logging
+from typing import Dict, Optional
+from dataclasses import dataclass
+
+import numpy as np
+from astropy import units as u
+from astropy.time import Time
+from poliastro.bodies import Sun, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune
+from poliastro.ephem import Ephem
+from poliastro.twobody import Orbit
+
+
+@dataclass
+class BodyState:
+    """State of a solar system body."""
+    name: str
+    orbit: Optional[Orbit]
+    body: object
+
+
+class SolarSystem:
+    """Solar system model with planetary ephemerides."""
+
+    BODIES = {
+        'Mercury': Mercury,
+        'Venus': Venus,
+        'Earth': Earth,
+        'Mars': Mars,
+        'Jupiter': Jupiter,
+        'Saturn': Saturn,
+        'Uranus': Uranus,
+        'Neptune': Neptune,
+    }
+
+    def __init__(self, epoch: Time = None):
+        self.epoch = epoch if epoch is not None else Time.now()
+        self.body_states: Dict[str, BodyState] = {}
+        self._initialize_orbits()
+        logging.info(f"Initialized solar system with {len(self.body_states)} bodies")
+
+    def _initialize_orbits(self) -> None:
+        """
+        Initialize orbits using a time range centered on the epoch.
+        The range must bracket the epoch so interpolation is valid at epoch.
+        Using tdb scale to suppress TimeScaleWarning.
+        """
+        epoch_tdb = self.epoch.tdb
+
+        # Center the range on the epoch: -180 days to +180 days, 9 points
+        offsets = np.linspace(-180, 180, 9) * u.day
+        t_range = Time(
+            [epoch_tdb + offset for offset in offsets],
+            scale='tdb'
+        )
+
+        for name, body in self.BODIES.items():
+            try:
+                ephem = Ephem.from_body(body, t_range)
+                orbit = Orbit.from_ephem(Sun, ephem, self.epoch)
+                self.body_states[name] = BodyState(name=name, orbit=orbit, body=body)
+            except Exception as e:
+                logging.warning(f"Could not initialize orbit for {name}: {str(e)}")
+
+    def get_body_state(self, name: str) -> Optional[BodyState]:
+        return self.body_states.get(name)
+
+    def get_body_orbit(self, name: str) -> Optional[Orbit]:
+        state = self.body_states.get(name)
+        return state.orbit if state else None
+
+    def propagate(self, time_step: u.Quantity) -> None:
+        """Propagate all orbits forward in time."""
+        new_epoch = self.epoch + time_step
+        for name, state in self.body_states.items():
+            try:
+                state.orbit = state.orbit.propagate(time_step)
+            except Exception as e:
+                logging.warning(f"Could not propagate orbit for {name}: {str(e)}")
+        self.epoch = new_epoch
+
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/rotations.py
+```python
+"""Rotation and attitude dynamics module for spacecraft simulation."""
+
+import numpy as np
+from dataclasses import dataclass
+from typing import Tuple
+import astropy.units as u
+from numpy.linalg import inv
+
+@dataclass
+class Quaternion:
+    """Unit quaternion for 3D rotations."""
+    w: float  # Scalar component
+    x: float  # Vector components
+    y: float
+    z: float
+
+    def __post_init__(self):
+        """Normalize the quaternion to ensure it's a unit quaternion."""
+        norm = np.sqrt(self.w**2 + self.x**2 + self.y**2 + self.z**2)
+        self.w /= norm
+        self.x /= norm
+        self.y /= norm
+        self.z /= norm
+
+    def conjugate(self) -> 'Quaternion':
+        """Return the conjugate of this quaternion."""
+        return Quaternion(self.w, -self.x, -self.y, -self.z)
+
+def multiply_quaternions(q1: Quaternion, q2: Quaternion) -> Quaternion:
+    """Multiply two quaternions."""
+    w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
+    x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y
+    y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x
+    z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w
+    return Quaternion(w, x, y, z)
+
+class RotationState:
+    """Represents the rotational state of a rigid body."""
+
+    def __init__(self, orientation: Quaternion, angular_velocity: u.Quantity,
+                 inertia_tensor: np.ndarray):
+        """
+        Initialize rotation state.
+
+        Args:
+            orientation: Initial orientation as quaternion
+            angular_velocity: Initial angular velocity (rad/s)
+            inertia_tensor: 3x3 inertia tensor (kg·m²)
+        """
+        self.orientation = orientation
+        self.angular_velocity = angular_velocity.to(u.rad / u.s)
+        self.inertia_tensor = inertia_tensor
+
+    def propagate(self, time_step: u.s, torque: np.ndarray) -> None:
+        """
+        Propagate attitude dynamics forward in time with applied torque.
+
+        Args:
+            time_step: Time step for propagation (seconds)
+            torque: Applied torque in N·m (3-element array)
+        """
+        dt = time_step.to(u.s).value
+
+        # Convert angular velocity to rad/s for calculations
+        omega = self.angular_velocity.to(u.rad / u.s).value
+
+        # Euler's rotation equation: I*ω̇ + ω×(I*ω) = τ
+        omega_dot = np.dot(np.linalg.inv(self.inertia_tensor),
+                          torque - np.cross(omega, np.dot(self.inertia_tensor, omega)))
+
+        # Update angular velocity (first-order integration)
+        new_omega = omega + omega_dot * dt
+
+        # Update orientation using quaternion kinematics
+        omega_norm = np.linalg.norm(new_omega)
+        if omega_norm > 1e-10:  # Avoid division by zero
+            axis = new_omega / omega_norm
+            angle = omega_norm * dt
+            q_delta = Quaternion(
+                np.cos(angle/2),
+                axis[0] * np.sin(angle/2),
+                axis[1] * np.sin(angle/2),
+                axis[2] * np.sin(angle/2)
+            )
+            self.orientation = multiply_quaternions(q_delta, self.orientation)
+
+        # Update angular velocity (with units)
+        self.angular_velocity = new_omega * u.rad / u.s
+
+        # Renormalize quaternion to prevent drift
+        norm = np.sqrt(self.orientation.w**2 + self.orientation.x**2 +
+                      self.orientation.y**2 + self.orientation.z**2)
+        self.orientation = Quaternion(
+            self.orientation.w / norm,
+            self.orientation.x / norm,
+            self.orientation.y / norm,
+            self.orientation.z / norm
+        )
+
+
+
+def quaternion_to_euler(q: Quaternion) -> Tuple[float, float, float]:
+    """Convert quaternion to Euler angles (roll, pitch, yaw) in radians."""
+    # Roll (x-axis rotation)
+    sinr_cosp = 2 * (q.w * q.x + q.y * q.z)
+    cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2 * (q.w * q.y - q.z * q.x)
+    if abs(sinp) >= 1:
+        pitch = np.copysign(np.pi / 2, sinp)  # Use 90 degrees if out of range
+    else:
+        pitch = np.arcsin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/spacecraft.py
+```python
+import logging
+from dataclasses import dataclass, field
+
+import numpy as np
+from astropy import units as u
+from poliastro.twobody import Orbit
+
+
+@dataclass
+class SpacecraftRotation:
+    """Spacecraft rotational state."""
+    quaternion: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
+    angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))  # rad/s, plain array
+
+    def propagate(self, time_step: u.s, torque: u.Quantity, inertia_tensor: np.ndarray) -> None:
+        """
+        Propagate rotational state forward in time.
+
+        Args:
+            time_step: Time step for propagation
+            torque: Applied torque in N·m (astropy Quantity, shape (3,))
+            inertia_tensor: Moment of inertia tensor in kg·m² (plain numpy array, shape (3,3))
+        """
+        dt = float(time_step.to(u.s).value)
+
+        # torque values in N·m
+        tau = torque.to(u.N * u.m).value  # shape (3,), plain float array
+
+        # Angular acceleration: alpha = I^-1 * tau  (rad/s²)
+        I_inv = np.linalg.inv(inertia_tensor)
+        alpha = I_inv @ tau  # rad/s²
+
+        # Update angular velocity (plain float array, rad/s)
+        self.angular_velocity = self.angular_velocity + alpha * dt
+
+        # Update quaternion using first-order integration
+        omega = self.angular_velocity  # rad/s
+        omega_norm = float(np.linalg.norm(omega))
+
+        if omega_norm > 1e-10:
+            # Quaternion derivative: dq/dt = 0.5 * Omega(omega) * q
+            wx, wy, wz = omega
+            omega_matrix = 0.5 * np.array([
+                [0,  -wx, -wy, -wz],
+                [wx,   0,  wz, -wy],
+                [wy, -wz,   0,  wx],
+                [wz,  wy, -wx,   0]
+            ])
+            self.quaternion = self.quaternion + omega_matrix @ self.quaternion * dt
+            # Normalize quaternion
+            q_norm = np.linalg.norm(self.quaternion)
+            if q_norm > 1e-10:
+                self.quaternion = self.quaternion / q_norm
+
+
+class Spacecraft:
+    """Spacecraft model with orbital and rotational state."""
+
+    def __init__(self, name: str, orbit: Orbit, mass: u.Quantity):
+        self.name = name
+        self.orbit = orbit
+        self.mass = mass.to(u.kg)
+        self.rotation = SpacecraftRotation()
+
+        # Default inertia tensor: solid sphere approximation (kg·m²), plain numpy array
+        m = float(self.mass.value)
+        r = 2.0  # assumed radius in meters
+        I = (2.0 / 5.0) * m * r ** 2
+        self.inertia_tensor = np.eye(3) * I
+
+        # Current torque: astropy Quantity
+        self._current_torque = np.zeros(3) * u.N * u.m
+
+        logging.info(f"Initialized spacecraft {self.name} with mass {self.mass}")
+
+    def apply_torque(self, torque: u.Quantity) -> None:
+        """Apply torque to the spacecraft."""
+        if not torque.unit.is_equivalent(u.N * u.m):
+            raise ValueError(f"Torque must have units equivalent to N·m, got {torque.unit}")
+        if torque.shape != (3,):
+            raise ValueError(f"Torque must be a 3-element vector, got shape {torque.shape}")
+        self._current_torque = torque.to(u.N * u.m)
+
+    def propagate_orbit(self, time_step: u.s) -> None:
+        """Propagate orbital state forward in time."""
+        self.orbit = self.orbit.propagate(time_step)
+
+    def propagate_attitude(self, time_step: u.s) -> None:
+        """Propagate attitude state forward in time."""
+        self.rotation.propagate(time_step, self._current_torque, self.inertia_tensor)
+
+    def get_angular_velocity_str(self) -> str:
+        """Return angular velocity as a formatted string."""
+        return np.array2string(self.rotation.angular_velocity, precision=6, suppress_small=True)
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/api.py
+```python
+import logging
+from typing import Callable, Dict, Optional
+import numpy as np
+from astropy import units as u
+from astropy.time import Time
+from poliastro.twobody import Orbit
+
+from model.spacecraft import Spacecraft
+from model.solar_system import SolarSystem
+
+
+class ControlHook:
+    """Wrapper for spacecraft control hooks."""
+
+    def __init__(self, callback: Callable, hook_type: str):
+        self.callback = callback
+        self.hook_type = hook_type
+
+    def __call__(self, time_step: u.Quantity, spacecraft: Spacecraft):
+        return self.callback(time_step, spacecraft)
+
+
+class SpaceflightSimAPI:
+    """API for interacting with the spaceflight simulation model."""
+
+    def __init__(self, epoch: Time = None):
+        """
+        Initialize the simulation API.
+
+        Args:
+            epoch: Optional simulation start epoch. Defaults to Time.now().
+        """
+        self.solar_system = SolarSystem(epoch=epoch)
+        self.spacecraft: Dict[str, Spacecraft] = {}
+        self.hooks: Dict[str, Dict[str, ControlHook]] = {}
+        self.simulation_time = 0.0 * u.s
+        logging.info("SpaceflightSimAPI initialized with control hook system")
+
+    def add_spacecraft(self, name: str, orbit: Orbit, mass: u.Quantity = 1000 * u.kg) -> None:
+        """Add a spacecraft to the simulation."""
+        if name in self.spacecraft:
+            raise ValueError(f"Spacecraft {name} already exists")
+        self.spacecraft[name] = Spacecraft(name, orbit, mass)
+        self.hooks[name] = {}
+        logging.info(f"Added spacecraft {name} with mass {mass.to(u.kg).value} kg")
+
+    def register_spacecraft_hook(
+        self,
+        spacecraft_name: str,
+        callback: Callable,
+        hook_type: str
+    ) -> None:
+        """
+        Register a control hook for a spacecraft.
+
+        Args:
+            spacecraft_name: Name of the spacecraft
+            callback: Function with signature func(time_step, spacecraft)
+            hook_type: One of 'pre_attitude_control', 'post_attitude_control'
+        """
+        if spacecraft_name not in self.spacecraft:
+            raise ValueError(f"Spacecraft {spacecraft_name} not found")
+        self.hooks[spacecraft_name][hook_type] = ControlHook(callback, hook_type)
+        logging.info(f"Registered spacecraft control hook: {hook_type}")
+
+    def propagate_system(self, time_step: u.Quantity) -> None:
+        """Propagate the entire system forward in time."""
+        self.solar_system.propagate(time_step)
+
+        for name, spacecraft in self.spacecraft.items():
+            if "pre_attitude_control" in self.hooks[name]:
+                self.hooks[name]["pre_attitude_control"](time_step, spacecraft)
+
+            spacecraft.propagate_attitude(time_step)
+
+            if "post_attitude_control" in self.hooks[name]:
+                self.hooks[name]["post_attitude_control"](time_step, spacecraft)
+
+            spacecraft.propagate_orbit(time_step)
+
+        self.simulation_time = self.simulation_time + time_step
+
+    def get_spacecraft_state(self, name: str):
+        """Get the current state of a spacecraft."""
+        if name not in self.spacecraft:
+            raise ValueError(f"Spacecraft {name} not found")
+        sc = self.spacecraft[name]
+        return sc.orbit.state
+
+    def apply_spacecraft_maneuver(self, name: str, delta_v: np.ndarray) -> None:
+        """
+        Apply an impulsive maneuver to a spacecraft.
+
+        Args:
+            name: Spacecraft name
+            delta_v: Delta-v vector in km/s (plain numpy array, shape (3,))
+        """
+        if name not in self.spacecraft:
+            raise ValueError(f"Spacecraft {name} not found")
+        sc = self.spacecraft[name]
+        dv = delta_v * u.km / u.s
+        from poliastro.maneuver import Maneuver
+        maneuver = Maneuver.impulse(dv)
+        sc.orbit = sc.orbit.apply_maneuver(maneuver)
+
+    def get_body_state(self, name: str):
+        """Get the current state of a solar system body."""
+        return self.solar_system.get_body_state(name)
+
+    def get_relative_position(self, body1: str, body2: str) -> np.ndarray:
+        """
+        Get position of body2 relative to body1 in km.
+
+        Args:
+            body1: Reference body name
+            body2: Target body name
+
+        Returns:
+            Relative position vector in km as plain numpy array
+        """
+        state1 = self.solar_system.get_body_state(body1)
+        state2 = self.solar_system.get_body_state(body2)
+        if state1 is None or state2 is None:
+            raise ValueError(f"Could not find states for {body1} and/or {body2}")
+        r1 = state1.orbit.r.to(u.km).value
+        r2 = state2.orbit.r.to(u.km).value
+        return r2 - r1
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/utils.py
+```python
+from astropy import units as u
+from astropy.time import Time
+
+
+def time_to_epoch(time: Time) -> u.Quantity:
+    """Convert an astropy Time object to an epoch (Julian date)."""
+    return time.jd * u.day
+
+```text
+/home/madmaxfz/PycharmProjects/SFsim/model/solar_system.py
+```python
+import logging
+from typing import Dict, Optional
+from dataclasses import dataclass
+
+import numpy as np
+from astropy import units as u
+from astropy.time import Time
+from poliastro.bodies import Sun, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune
+from poliastro.ephem import Ephem
+from poliastro.twobody import Orbit
+
+
+@dataclass
+class BodyState:
+    """State of a solar system body."""
+    name: str
+    orbit: Optional[Orbit]
+    body: object
+
+
+class SolarSystem:
+    """Solar system model with planetary ephemerides."""
+
+    BODIES = {
+        'Mercury': Mercury,
+        'Venus': Venus,
+        'Earth': Earth,
+        'Mars': Mars,
+        'Jupiter': Jupiter,
+        'Saturn': Saturn,
+        'Uranus': Uranus,
+        'Neptune': Neptune,
+    }
+
+    def __init__(self, epoch: Time = None):
+        self.epoch = epoch if epoch is not None else Time.now()
+        self.body_states: Dict[str, BodyState] = {}
+        self._initialize_orbits()
+        logging.info(f"Initialized solar system with {len(self.body_states)} bodies")
+
+    def _initialize_orbits(self) -> None:
+        """
+        Initialize orbits using a time range centered on the epoch.
+        The range must bracket the epoch so interpolation is valid at epoch.
+        Using tdb scale to suppress TimeScaleWarning.
+        """
+        epoch_tdb = self.epoch.tdb
+
+        # Center the range on the epoch: -180 days to +180 days, 9 points
+        offsets = np.linspace(-180, 180, 9) * u.day
+        t_range = Time(
+            [epoch_tdb + offset for offset in offsets],
+            scale='tdb'
+        )
+
+        for name, body in self.BODIES.items():
+            try:
+                ephem = Ephem.from_body(body, t_range)
+                orbit = Orbit.from_ephem(Sun, ephem, self.epoch)
+                self.body_states[name] = BodyState(name=name, orbit=orbit, body=body)
+            except Exception as e:
+                logging.warning(f"Could not initialize orbit for {name}: {str(e)}")
+
+    def get_body_state(self, name: str) -> Optional[BodyState]:
+        return self.body_states.get(name)
+
+    def get_body_orbit(self, name: str) -> Optional[Orbit]:
+        state = self.body_states.get(name)
+        return state.orbit if state else None
+
+    def propagate(self, time_step: u.Quantity) -> None:
+        """Propagate all orbits forward in time."""
+        new_epoch = self.epoch + time_step
+        for name, state in self.body_states.items():
+            try:
+                state.orbit = state.orbit.propagate(time_step)
+            except Exception as e:
+                logging.warning(f"Could not propagate orbit for {name}: {str(e)}")
+        self.epoch = new_epoch
+
