@@ -179,15 +179,19 @@ def _coast_helio(solar, r, v, t0, t1, exclude, steps=600):
     return r, v
 
 
-def solve_tcm(solar, r, v, t, target, t_arrive, pe_alt_km=300.0, iters=8):
+def solve_tcm(solar, r, v, t, target, t_arrive, pe_alt_km=300.0, iters=8,
+              accel_kms2=None):
     """
-    B-plane targeting. Returns the minimum-norm delta-v vector (km/s, heliocentric)
+    B-plane targeting. Seeds a delta-v vector (km/s, heliocentric)
     that places the ship's miss vector, perpendicular to the approach velocity,
     at the impact parameter giving a periapsis altitude of `pe_alt_km`.
     Arrival timing is left free. The target is treated as massless during the
-    solve (linear flyby geometry); its gravity then bends the path to the
-    requested periapsis. Requires the ship to be in the Sun's SOI.
+    seed solve. Refine against the incoming periapsis predicted with target
+    gravity, approximating a finite burn by an impulse at its midpoint.
+    Returns None if a candidate cannot be verified. Requires solar cruise.
     """
+    if not np.isfinite(t_arrive) or t_arrive <= t or not np.isfinite(pe_alt_km) or pe_alt_km < 0:
+        return None
     mu_t = gm(target)
     rp = radius(target) + pe_alt_km
 
@@ -200,9 +204,12 @@ def solve_tcm(solar, r, v, t, target, t_arrive, pe_alt_km=300.0, iters=8):
     for _ in range(iters):
         m, vrel = miss(dv)
         vinf = np.linalg.norm(vrel)
+        if not np.isfinite(vinf) or vinf < 1e-9:
+            return None
         u_v = vrel / vinf
         # B-plane basis
-        e1 = unit(np.cross(u_v, [0.0, 0.0, 1.0]))
+        axis = np.eye(3)[np.argmin(np.abs(u_v))]
+        e1 = unit(np.cross(u_v, axis))
         e2 = np.cross(u_v, e1)
         B = np.array([m @ e1, m @ e2])
         b = rp * np.sqrt(1 + 2 * mu_t / (rp * vinf ** 2))
@@ -222,4 +229,68 @@ def solve_tcm(solar, r, v, t, target, t_arrive, pe_alt_km=300.0, iters=8):
         if n > 0.5:
             step *= 0.5 / n
         dv = dv + step
-    return dv
+    return _refine_tcm(solar, r, v, t, target, t_arrive, pe_alt_km, dv, accel_kms2)
+
+
+def _refine_tcm(solar, r, v, t, target, t_arrive, pe_alt_km, seed, accel_kms2):
+    """Differentially correct incoming osculating periapsis at SOI entry."""
+    from model.dynamics import propagate_free, perturbers, rk4_step_tv
+
+    mu_t = gm(target)
+    lead = t_arrive - t
+    duration = lead + 60 * 86400.0
+    # Finite-difference impulse sized to move the arrival by roughly 10 km.
+    eps = float(np.clip(10.0 / lead, 5e-7, 1e-4))
+
+    def periapsis(dv):
+        half = 0.5 * np.linalg.norm(dv) / accel_kms2 if accel_kms2 else 0.0
+        if half >= lead:
+            return None
+        if half:
+            rr, vv = rk4_step_tv(
+                r, v, t, half, gm('Sun'),
+                lambda tt: perturbers(solar.states(tt), 'Sun')[:2], np.zeros(3))
+        else:
+            rr, vv = r, v
+        tt, rr, vv, dom = propagate_free(
+            solar, rr, vv + dv, t + half, duration - half, fraction=0.001,
+            max_steps=4000, sample_every=4001, target=target, stop_at_target=True)[-1]
+        if dom != target:
+            return None
+        rt, vt = solar.states(tt)[target]
+        rr, vv = rr - rt, vv - vt
+        if rr @ vv >= 0:
+            return None
+        # p/(1+e) is well conditioned even for nearly parabolic encounters.
+        h = np.cross(rr, vv)
+        e = np.linalg.norm(np.cross(vv, h) / mu_t - unit(rr))
+        return (h @ h) / (mu_t * (1.0 + e)) - radius(target)
+
+    coast_alt = periapsis(np.zeros(3))
+    if coast_alt is not None and abs(coast_alt - pe_alt_km) <= 5.0:
+        return np.zeros(3)
+    dv = seed
+    alt = periapsis(dv)
+    if alt is None:
+        return None
+    for _ in range(8):
+        err = alt - pe_alt_km
+        if abs(err) <= 5.0:
+            return dv
+        nearby = [periapsis(dv + eps * axis) for axis in np.eye(3)]
+        if any(a is None for a in nearby):
+            return None
+        gradient = (np.array(nearby) - alt) / eps
+        norm2 = gradient @ gradient
+        if not np.isfinite(norm2) or norm2 == 0:
+            return None
+        step = -err * gradient / norm2
+        for scale in (1.0, 0.5, 0.25, 0.125):
+            trial = dv + scale * step
+            trial_alt = periapsis(trial)
+            if trial_alt is not None and abs(trial_alt - pe_alt_km) < abs(err):
+                dv, alt = trial, trial_alt
+                break
+        else:
+            return None
+    return dv if abs(alt - pe_alt_km) <= 5.0 else None

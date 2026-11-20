@@ -62,10 +62,13 @@ class Spacecraft:
     def max_accel(self) -> float:
         return self.cfg.thrust / self.mass / 1000.0             # km/s^2
 
-    def thrust_accel(self) -> np.ndarray:
-        """Inertial thrust acceleration (km/s^2) for the current throttle."""
+    def thrust_accel(self, dt: float = 0.0) -> np.ndarray:
+        """Inertial thrust acceleration (km/s^2), averaged over dt if given."""
         if self.throttle <= 0 or self.propellant <= 0 or self.status != 'FLIGHT':
             return np.zeros(3)
+        if dt > 0:
+            used = min(self.propellant, self.mass_flow * self.throttle * dt)
+            return self.forward * (-self.cfg.isp * G0 * np.log1p(-used / self.mass) / dt)
         return self.forward * self.max_accel * self.throttle
 
     # ---------------------------------------------------------------- updates
@@ -73,9 +76,9 @@ class Spacecraft:
         """Consume propellant for dt seconds; returns dv delivered (km/s)."""
         if self.throttle <= 0 or self.propellant <= 0:
             return 0.0
-        m0 = self.mass
-        self.propellant = max(0.0, self.propellant - self.mass_flow * self.throttle * dt)
-        dv = self.cfg.isp * G0 * np.log(m0 / self.mass)
+        used = min(self.propellant, self.mass_flow * self.throttle * dt)
+        dv = -self.cfg.isp * G0 * np.log1p(-used / self.mass)
+        self.propellant -= used
         self.dv_expended += dv
         if self.propellant <= 0:
             self.throttle = 0.0

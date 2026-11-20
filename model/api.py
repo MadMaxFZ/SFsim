@@ -207,12 +207,12 @@ class SpaceflightSimAPI:
                 # short steps: perturbers barely move, use the cached set
                 if ig.t_pert is None or abs(t + 0.5 * h - ig.t_pert) > PERTURBER_REFRESH_S:
                     ig.refresh(t + 0.5 * h)
-                ig.r, ig.v = rk4_step(ig.r, ig.v, h, mu_d, ig.s, ig.mu_k, sc.thrust_accel())
+                ig.r, ig.v = rk4_step(ig.r, ig.v, h, mu_d, ig.s, ig.mu_k, sc.thrust_accel(h))
             else:
                 dom = ig.dom
                 ig.r, ig.v = rk4_step_tv(ig.r, ig.v, t, h, mu_d,
                                          lambda tt: perturbers(self.solar_system.states(tt), dom)[:2],
-                                         sc.thrust_accel())
+                                         sc.thrust_accel(h))
                 ig.refresh(t + h)
             sc.burn_propellant(h)
             t += h
