@@ -1,111 +1,91 @@
+# model/spacecraft.py
+"""Spacecraft: translational state, propulsion, and rigid-body attitude."""
+
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
-from astropy import units as u
-from poliastro.twobody import Orbit
+
+from model.constants import G0
+from model.rotations import q_to_matrix, q_integrate
 
 
 @dataclass
-class SpacecraftRotation:
-    """Spacecraft rotational state."""
-    quaternion: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
-    angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))  # rad/s, plain array
-    inertia_tensor: np.ndarray = np.eye(3)
-
-    def propagate(self, time_step: u.s, torque: u.Quantity, inertia_tensor: np.ndarray) -> None:
-        """
-        Propagate rotational state forward in time.
-
-        Args:
-            time_step: Time step for propagation
-            torque: Applied torque in N·m (astropy Quantity, shape (3,))
-            inertia_tensor: Moment of inertia tensor in kg·m² (plain numpy array, shape (3,3))
-        """
-        dt = float(time_step.to(u.s).value)
-
-        # torque values in N·m
-        tau = torque.to(u.N * u.m).value  # shape (3,), plain float array
-
-        # Angular acceleration: alpha = I^-1 * tau  (rad/s²)
-        I_inv = np.linalg.inv(inertia_tensor)
-        alpha = I_inv @ tau  # rad/s²
-
-        # Update angular velocity (plain float array, rad/s)
-        self.angular_velocity = self.angular_velocity + alpha * dt
-
-        # Update quaternion using first-order integration
-        omega = self.angular_velocity  # rad/s
-        omega_norm = float(np.linalg.norm(omega))
-
-        if omega_norm > 1e-10:
-            # Quaternion derivative: dq/dt =0 0.5 * Omega(omega) * q
-            wx, wy, wz = omega
-            omega_matrix = 0.5 * np.array([
-                [0,  -wx, -wy, -wz],
-                [wx,   0,  wz, -wy],
-                [wy, -wz,   0,  wx],
-                [wz,  wy, -wx,   0]
-            ])
-            self.quaternion = self.quaternion + omega_matrix @ self.quaternion * dt
-            # Normalize quaternion
-            q_norm = np.linalg.norm(self.quaternion)
-            if q_norm > 1e-10:
-                self.quaternion = self.quaternion / q_norm
+class ShipConfig:
+    dry_mass: float = 8000.0         # kg
+    propellant: float = 22000.0      # kg
+    thrust: float = 120e3            # N, main engine (body +X)
+    isp: float = 3500.0              # s  (high-performance nuclear-thermal class)
+    rcs_torque: float = 4000.0       # N*m per axis
+    size: tuple = (12.0, 4.0, 4.0)   # m, box used for the inertia tensor
 
 
 class Spacecraft:
-    """Spacecraft model with orbital and rotational state."""
-
-    def __init__(self, name: str, orbit: Orbit, mass: u.Quantity):
+    def __init__(self, name: str, r: np.ndarray, v: np.ndarray, config: ShipConfig = None):
         self.name = name
-        self.orbit = orbit
-        self.mass = mass.to(u.kg)
-        self.rotation = SpacecraftRotation()
+        self.cfg = config or ShipConfig()
+        self.r = np.asarray(r, float)        # km, heliocentric ecliptic
+        self.v = np.asarray(v, float)        # km/s
+        self.propellant = self.cfg.propellant
+        self.throttle = 0.0                  # 0..1
+        self.q = np.array([1.0, 0.0, 0.0, 0.0])   # body -> inertial
+        self.omega = np.zeros(3)             # rad/s, body frame
+        self.torque_cmd = np.zeros(3)        # N*m, body frame (from RCS)
+        self.dv_expended = 0.0               # km/s
+        self.status = 'FLIGHT'               # FLIGHT | CRASHED
+        logging.info(f"Spacecraft {name}: wet {self.mass:.0f} kg, dV {self.delta_v_remaining * 1000:.0f} m/s")
 
-        # Default inertia tensor: solid sphere approximation (kg·m²), plain numpy array
-        m = float(self.mass.value)
-        r = 2.0  # assumed radius in meters
-        I = (2.0 / 5.0) * m * r ** 2
-        self.rotation.inertia_tensor = np.eye(3) * I
-
-        # Current torque: astropy Quantity
-        self._current_torque = np.zeros(3) * u.N * u.m
-
-        logging.info(f"Initialized spacecraft {self.name} with mass {self.mass}")
-
-    def apply_torque(self, torque: u.Quantity) -> None:
-        """Apply torque to the spacecraft."""
-        if not torque.unit.is_equivalent(u.N * u.m):
-            raise ValueError(f"Torque must have units equivalent to N·m, got {torque.unit}")
-        if torque.shape != (3,):
-            raise ValueError(f"Torque must be a 3-element vector, got shape {torque.shape}")
-        self._current_torque = torque.to(u.N * u.m)
-
-    def propagate_orbit(self, time_step: u.s) -> None:
-        """Propagate orbital state forward in time."""
-        self.orbit = self.orbit.propagate(time_step)
-
-    def propagate_attitude(self, time_step: u.s) -> None:
-        """Propagate attitude state forward in time."""
-        self.rotation.propagate(time_step, self._current_torque, self.inertia_tensor)
-
-    def get_angular_velocity_str(self) -> str:
-        """Return angular velocity as a formatted string."""
-        return np.array2string(self.rotation.angular_velocity, precision=6, suppress_small=True)
+    # ------------------------------------------------------------- properties
+    @property
+    def mass(self) -> float:
+        return self.cfg.dry_mass + self.propellant
 
     @property
-    def inertia_tensor(self):
-        return self.rotation.inertia_tensor
+    def inertia(self) -> np.ndarray:
+        lx, ly, lz = self.cfg.size
+        m = self.mass
+        return np.diag([m * (ly ** 2 + lz ** 2), m * (lx ** 2 + lz ** 2), m * (lx ** 2 + ly ** 2)]) / 12.0
 
     @property
-    def state(self):
-        return {        'name'                 : self.name,
-                        'position_km'          : self.orbit.r.to(u.km),
-                        'velocity_kms'         : self.orbit.v.to(u.km / u.s),
-                        'mass_kg'              : self.mass.to(u.kg).value,
-                        'angular_velocity_rads': self.rotation.angular_velocity,
-                        'quaternion'           : self.rotation.quaternion,
-                        'inertia_tensor'       : self.rotation.inertia_tensor,
-                        'orbit'                : self.orbit
-                        }
+    def forward(self) -> np.ndarray:
+        return q_to_matrix(self.q)[:, 0]
+
+    @property
+    def mass_flow(self) -> float:
+        return self.cfg.thrust / (self.cfg.isp * G0 * 1000.0)    # kg/s at full throttle
+
+    @property
+    def delta_v_remaining(self) -> float:
+        return self.cfg.isp * G0 * np.log(self.mass / self.cfg.dry_mass)   # km/s
+
+    @property
+    def max_accel(self) -> float:
+        return self.cfg.thrust / self.mass / 1000.0             # km/s^2
+
+    def thrust_accel(self) -> np.ndarray:
+        """Inertial thrust acceleration (km/s^2) for the current throttle."""
+        if self.throttle <= 0 or self.propellant <= 0 or self.status != 'FLIGHT':
+            return np.zeros(3)
+        return self.forward * self.max_accel * self.throttle
+
+    # ---------------------------------------------------------------- updates
+    def burn_propellant(self, dt: float) -> float:
+        """Consume propellant for dt seconds; returns dv delivered (km/s)."""
+        if self.throttle <= 0 or self.propellant <= 0:
+            return 0.0
+        m0 = self.mass
+        self.propellant = max(0.0, self.propellant - self.mass_flow * self.throttle * dt)
+        dv = self.cfg.isp * G0 * np.log(m0 / self.mass)
+        self.dv_expended += dv
+        if self.propellant <= 0:
+            self.throttle = 0.0
+        return dv
+
+    def step_attitude(self, dt: float) -> None:
+        """Euler's equations with RCS torque; exact quaternion step for the mean rate."""
+        I = self.inertia
+        tau = np.clip(self.torque_cmd, -self.cfg.rcs_torque, self.cfg.rcs_torque)
+        w_dot = np.linalg.solve(I, tau - np.cross(self.omega, I @ self.omega))
+        w_new = self.omega + w_dot * dt
+        self.q = q_integrate(self.q, 0.5 * (self.omega + w_new), dt)
+        self.omega = w_new

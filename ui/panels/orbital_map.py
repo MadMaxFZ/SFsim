@@ -1,173 +1,190 @@
 #!/usr/bin/python
 # ui/panels/orbital_map.py
 
-import pygame
+import math
+
 import numpy as np
-from astropy import units as u
-from ui.panel_base import PanelBase
+import pygame
+
+from model.constants import AU_KM, BODIES, gm, parent, radius
+from model.kepler import rv_to_elements, conic_points
+from ui.colors import Colors
+from ui.panel_base import PanelBase, fmt_dist
 
 
 class OrbitalMap(PanelBase):
     """
-    2D top-down ecliptic plane view of the solar system.
-    Supports zoom and pan. Bodies rendered as colored dots with labels.
-    Spacecraft rendered with velocity vector indicator.
+    Top-down ecliptic map centred on a focus body (F cycles focus, C centres
+    on the ship's primary). Mouse wheel / PgUp / PgDn zoom over ~10 decades.
+
+    Draws: planetary orbits, bodies (true radius or minimum dot), SOI circles,
+    the ship's osculating conic (bound) or predicted coast trajectory
+    (escape / interplanetary), the ship marker with nose and velocity vectors,
+    and the selected target.
     """
 
-    BODY_COLORS = {
-        'Mercury': (180, 140, 100),
-        'Venus':   (220, 200, 100),
-        'Earth':   ( 80, 140, 220),
-        'Moon':    (180, 180, 180),
-        'Mars':    (200,  80,  60),
-        'Jupiter': (200, 160, 120),
-        'Saturn':  (220, 200, 140),
-        'Uranus':  (140, 200, 220),
-        'Neptune': ( 80, 100, 220),
-    }
+    FOCUS_ORDER = ['Sun'] + [n for n in BODIES if n != 'Sun']
 
-    BODY_RADIUS_PX = {
-        'Sun':     8,
-        'Earth':   4,
-        'Moon':    2,
-        'default': 3,
-    }
-
-    AU_TO_KM = 1.496e08  # kilometers per AU
-
-    def __init__(self, screen, rect, api):
-        super().__init__(screen, rect, api)
-        # Default view: 6 AU across the map width
-        self.view_au = 6.0
-        self.center_offset = np.array([0.0, 0.0])  # pan offset in AU
-        self._dragging = False
-        self._drag_start = None
+    def __init__(self, screen, rect, app):
+        super().__init__(screen, rect, app)
+        self.focus = 'Earth'
+        self.view_km = 60000.0           # width of the map in km
+        self.follow_ship = True
+        self._orbit_cache = {}
+        self._orbit_cache_t = -1e18
 
     @property
     def scale(self) -> float:
-        """Pixels per AU."""
-        return self.rect.width / self.view_au
+        return self.rect.width / self.view_km      # px per km
 
-    def world_to_screen(self, x_m: float, y_m: float):
-        """Convert meters (heliocentric) to screen pixel coords."""
-        # if type(x_m) == type(1 * u.s):
-        #     x_m = x_m.value
-        # if type(y_m) == type(1 * u.s):
-        #     y_m = y_m.value
-        x_au = x_m.to(u.AU).value
-        y_au = y_m.to(u.AU).value
-        cx = self.rect.width / 2 + self.center_offset[0] * self.scale
-        cy = self.rect.height / 2 + self.center_offset[1] * self.scale
-        px = cx + x_au * self.scale
-        py = cy - y_au * self.scale  # y flipped for screen coords
-        pass
-        return int(px), int(py)
+    def to_screen(self, rel_km):
+        return (int(self.rect.width / 2 + rel_km[0] * self.scale),
+                int(self.rect.height / 2 - rel_km[1] * self.scale))
 
+    def _visible(self, p, margin=50):
+        return -margin <= p[0] < self.rect.width + margin and -margin <= p[1] < self.rect.height + margin
+
+    # ------------------------------------------------------------ rendering
     def render(self) -> None:
+        snap = self.snap
         self.clear()
-        self._draw_grid()
-        self._draw_sun()
-        self._draw_bodies()
-        self._draw_spacecraft()
+        bodies = snap['bodies']
+        ship = snap['ship']
+        if self.follow_ship:
+            self.focus = ship['dominant']
+        c = bodies[self.focus]
+        self._draw_orbits(c)
+        self._draw_bodies(c)
+        self._draw_ship_path(c)
+        self._draw_ship(c)
         self.draw_border()
-        self._draw_scale_indicator()
+        self._draw_overlay()
 
-    def _draw_grid(self) -> None:
-        """Concentric AU rings."""
-        cx = self.rect.width // 2 + int(self.center_offset[0] * self.scale)
-        cy = self.rect.height // 2 + int(self.center_offset[1] * self.scale)
-        for r_au in [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]:
-            r_px = int(r_au * self.scale)
-            pygame.draw.circle(self.surface, self.COLOR_GRID,
-                               (cx, cy), r_px, 1)
+    def _planet_orbits(self):
+        t = self.snap['t']
+        if abs(t - self._orbit_cache_t) > 86400 * 2:   # orbits change slowly
+            self._orbit_cache = {}
+            api = self.app.api
+            for name in BODIES:
+                if name == 'Sun':
+                    continue
+                el = api.solar_system.orbit_elements(name, t)
+                self._orbit_cache[name] = (parent(name), conic_points(el, 240))
+            self._orbit_cache_t = t
+        return self._orbit_cache
 
-    def _draw_sun(self) -> None:
-        cx = self.rect.width // 2 + int(self.center_offset[0] * self.scale)
-        cy = self.rect.height // 2 + int(self.center_offset[1] * self.scale)
-        pygame.draw.circle(self.surface, (255, 220, 60), (cx, cy), 8)
-        pygame.draw.circle(self.surface, (255, 255, 120), (cx, cy), 4)
+    def _polyline(self, pts_rel, color, width=1):
+        pts = [self.to_screen(p) for p in pts_rel if np.all(np.isfinite(p))]
+        pts = [p for p in pts if abs(p[0]) < 20000 and abs(p[1]) < 20000]
+        if len(pts) > 1:
+            pygame.draw.lines(self.surface, color, False, pts, width)
 
-    def _draw_bodies(self) -> None:
-        state = self.api.get_system_state()
-        bodies = state.get('bodies', {})
-        for name, data in bodies.items():
-            pos = data.get('position_km')
-            if pos is None:
+    def _draw_orbits(self, c):
+        bodies = self.snap['bodies']
+        for name, (par, pts) in self._planet_orbits().items():
+            # skip orbits much smaller than a pixel or far larger than the view
+            a = np.max(np.linalg.norm(pts, axis=1))
+            if a * self.scale < 3:
                 continue
-            x, y = self.world_to_screen(pos[0], pos[1])
-            if not (0 <= x < self.rect.width and 0 <= y < self.rect.height):
-                continue
-            color = self.BODY_COLORS.get(name, (200, 200, 200))
-            r = self.BODY_RADIUS_PX.get(name, self.BODY_RADIUS_PX['default'])
-            pygame.draw.circle(self.surface, color, (x, y), r)
-            self.draw_label(name, x + r + 2, y - 6,
-                            font=self.FONT_MONO_SM,
-                            color=self.COLOR_TEXT_DIM)
+            self._polyline(pts + bodies[par] - c, Colors.ORBIT_LINE)
 
-    def _draw_spacecraft(self) -> None:
-        state = self.api.get_system_state()
-        spacecraft = state.get('spacecraft', {})
-        body_set = state.get('bodies')
-        for name, data in spacecraft.items():
-            pos = data.get('position_km')
-            attr_pos = body_set[data.get('orbit').attractor.name].get('position_km')
-            if pos is None:
+    def _draw_bodies(self, c):
+        snap = self.snap
+        tgt = snap['ai']['target']
+        for name, pos in snap['bodies'].items():
+            p = self.to_screen(pos - c)
+            if not self._visible(p, 200):
                 continue
-
-            atr_x, atr_y = self.world_to_screen(attr_pos[0], attr_pos[1])
-            sat_x, sat_y = self.world_to_screen(pos[0], pos[1])
-            x = atr_x + sat_x
-            y = atr_y - sat_y       # add ship position to its parent body's position
-            if not (0 <= x < self.rect.width and 0 <= y < self.rect.height):
+            r_px = max(2 if name != 'Sun' else 5, int(radius(name) * self.scale))
+            color = Colors.SUN_COLOR if name == 'Sun' else Colors.BODY_COLORS.get(name, (200, 200, 200))
+            if r_px > 4000:
                 continue
-            # Draw diamond marker
-            size = 5
-            points = [(x, y - size), (x + size, y),
-                      (x, y + size), (x - size, y)]
-            pygame.draw.polygon(self.surface, self.COLOR_ACCENT, points, 1)
-            self.draw_label(name, x + size + 2, y - 6,
-                            font=self.FONT_MONO_SM,
-                            color=self.COLOR_ACCENT)
+            pygame.draw.circle(self.surface, color, p, r_px)
+            soi = snap['soi'].get(name, math.inf)
+            if math.isfinite(soi):
+                s_px = int(soi * self.scale)
+                if 6 < s_px < 4000:
+                    pygame.draw.circle(self.surface, Colors.GRID_LINE, p, s_px, 1)
+            label_color = Colors.AMBER if name == tgt else self.COLOR_TEXT_DIM
+            self.draw_label(name, p[0] + r_px + 3, p[1] - 6, font=self.FONT_MONO_SM, color=label_color)
+            if name == tgt:
+                pygame.draw.circle(self.surface, Colors.AMBER, p, r_px + 5, 1)
 
-    def _draw_scale_indicator(self) -> None:
-        """Draw a 1 AU scale bar in the bottom-left corner."""
-        bar_au = 1.0
-        bar_px = int(bar_au * self.scale)
-        x0 = 20
-        y0 = self.rect.height - 20
-        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM,
-                         (x0, y0), (x0 + bar_px, y0), 1)
-        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM,
-                         (x0, y0 - 4), (x0, y0 + 4), 1)
-        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM,
-                         (x0 + bar_px, y0 - 4), (x0 + bar_px, y0 + 4), 1)
-        self.draw_label("1 AU", x0 + bar_px // 2 - 12, y0 - 18,
-                        font=self.FONT_MONO_SM, color=self.COLOR_TEXT_DIM)
+    def _draw_ship_path(self, c):
+        snap = self.snap
+        ship = snap['ship']
+        dom = ship['dominant']
+        bodies = snap['bodies']
+        pred = snap['prediction']
+        if pred:
+            # predicted coast: draw relative to the focus body *at each future time*
+            api = self.app.api
+            pts = []
+            for t, r, d in pred:
+                pts.append(r - api.solar_system.states(t)[self.focus][0])
+            self._polyline(pts, Colors.ORBIT_ACTIVE, 1)
+        else:
+            orb_rel = ship['r'] - bodies[dom], ship['v'] - (self.app.api.solar_system.states(snap['t'])[dom][1])
+            el = rv_to_elements(orb_rel[0], orb_rel[1], gm(dom))
+            pts = conic_points(el, 240, max_r=snap['soi'][dom])
+            self._polyline(pts + bodies[dom] - c, Colors.ORBIT_ACTIVE, 1)
+            # apsis markers
+            if el.bound and el.e > 1e-3:
+                from model.kepler import perifocal_basis
+                P, _ = perifocal_basis(el.i, el.raan, el.argp)
+                for rr, tag in ((el.periapsis, 'Pe'), (-el.apoapsis, 'Ap')):
+                    p = self.to_screen(P * rr + bodies[dom] - c)
+                    pygame.draw.circle(self.surface, Colors.CYAN, p, 3, 1)
+                    self.draw_label(tag, p[0] + 4, p[1] + 2, font=self.FONT_MONO_SM, color=Colors.CYAN)
+
+    def _draw_ship(self, c):
+        ship = self.snap['ship']
+        p = self.to_screen(ship['r'] - c)
+        if not self._visible(p):
+            return
+        s = 6
+        color = Colors.RED if ship['status'] == 'CRASHED' else Colors.SPACECRAFT_COLOR
+        pygame.draw.polygon(self.surface, color, [(p[0], p[1] - s), (p[0] + s, p[1]),
+                                                  (p[0], p[1] + s), (p[0] - s, p[1])], 1)
+        f = ship['forward']
+        pygame.draw.line(self.surface, Colors.AMBER, p, (p[0] + int(f[0] * 22), p[1] - int(f[1] * 22)), 1)
+        self.draw_label(ship['name'], p[0] + s + 3, p[1] - 6, font=self.FONT_MONO_SM, color=color)
+
+    def _draw_overlay(self):
+        # scale bar: largest 1-2-5 step below 1/4 of the width
+        target_km = self.view_km / 4
+        mag = 10 ** math.floor(math.log10(target_km))
+        step = max(m * mag for m in (1, 2, 5) if m * mag <= target_km)
+        bar_px = int(step * self.scale)
+        x0, y0 = 20, self.rect.height - 20
+        pygame.draw.line(self.surface, self.COLOR_TEXT_DIM, (x0, y0), (x0 + bar_px, y0), 1)
+        for x in (x0, x0 + bar_px):
+            pygame.draw.line(self.surface, self.COLOR_TEXT_DIM, (x, y0 - 4), (x, y0 + 4), 1)
+        self.draw_label(fmt_dist(step).strip(), x0, y0 - 18, font=self.FONT_MONO_SM, color=self.COLOR_TEXT_DIM)
+        mode = "FOLLOW" if self.follow_ship else "FIXED"
+        self.draw_label(f"MAP  focus {self.focus} [{mode}]  width {fmt_dist(self.view_km).strip()}",
+                        x0, y0 - 36, font=self.FONT_MONO_SM,
+                        color=self.COLOR_TEXT_DIM)
+
+    # --------------------------------------------------------------- input
+    def zoom(self, factor):
+        self.view_km = float(np.clip(self.view_km * factor, 2000.0, 200 * AU_KM))
+
+    def cycle_focus(self):
+        self.follow_ship = False
+        i = self.FOCUS_ORDER.index(self.focus)
+        self.focus = self.FOCUS_ORDER[(i + 1) % len(self.FOCUS_ORDER)]
+        self.view_km = max(self.view_km, 20 * radius(self.focus))
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        # Translate event coords to panel-local coords
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            lx = event.pos[0] - self.rect.x
-            ly = event.pos[1] - self.rect.y
-            if not (0 <= lx < self.rect.width and 0 <= ly < self.rect.height):
-                return
-            if event.button == 4:  # scroll up — zoom in
-                self.view_au = max(0.1, self.view_au * 0.9)
-            elif event.button == 5:  # scroll down — zoom out
-                self.view_au = min(60.0, self.view_au * 1.1)
-            elif event.button == 2:  # middle click — pan start
-                self._dragging = True
-                self._drag_start = (lx, ly)
-
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 2:
-                self._dragging = False
-
-        elif event.type == pygame.MOUSEMOTION:
-            if self._dragging:
-                lx = event.pos[0] - self.rect.x
-                ly = event.pos[1] - self.rect.y
-                dx = (lx - self._drag_start[0]) / self.scale
-                dy = -(ly - self._drag_start[1]) / self.scale
-                self.center_offset += np.array([dx, dy])
-                self._drag_start = (lx, ly)
+        if event.type == pygame.MOUSEWHEEL and self.contains(pygame.mouse.get_pos()):
+            self.zoom(0.85 if event.y > 0 else 1 / 0.85)
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_PAGEUP:
+                self.zoom(0.5)
+            elif event.key == pygame.K_PAGEDOWN:
+                self.zoom(2.0)
+            elif event.key == pygame.K_f:
+                self.cycle_focus()
+            elif event.key == pygame.K_c:
+                self.follow_ship = True

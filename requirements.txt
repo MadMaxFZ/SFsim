@@ -1,0 +1,4 @@
+numpy>=1.24
+astropy>=5.3
+pygame-ce>=2.4      # or classic pygame>=2.5 (same API)
+pytest>=7           # tests only

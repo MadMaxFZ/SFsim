@@ -2,72 +2,57 @@
 # ui/panels/timeline_bar.py
 
 import pygame
-from ui.panel_base import PanelBase
-from astropy.time import Time
+
+from ui.panel_base import PanelBase, fmt_time
 
 
 class TimelineBar(PanelBase):
     """
-    Bottom timeline bar with time warp controls and mission elapsed time.
+    Bottom bar: time-warp buttons (also ',' and '.') and the mission clock.
+    Warp requests go through App.set_warp so ShipOS rules can apply.
     """
 
-    WARP_RATES = [1, 10, 100, 1000, 10000]
+    WARP_RATES = [1, 10, 100, 1000, 10000, 100000, 1000000]
 
-    def __init__(self, screen, rect, api):
-        super().__init__(screen, rect, api)
-        self._warp_index = 0
-        self._button_rects = []
-        self._sim_time = 0.0
-        self.api = api
-
-    def update(self, sim_time: Time) -> None:
-        self._sim_time = sim_time
+    def __init__(self, screen, rect, app):
+        super().__init__(screen, rect, app)
+        self._buttons = []
 
     def render(self) -> None:
         self.clear()
         self.draw_border()
-        self._draw_warp_controls()
-        self._draw_epoch()
+        snap = self.snap
+        self._buttons.clear()
+        x, y = 20, self.rect.height // 2 - 15
+        for rate in self.WARP_RATES:
+            r = pygame.Rect(x, y, 70, 30)
+            active = rate == snap['warp_req']
+            col = self.COLOR_ACCENT if active else self.COLOR_BORDER
+            pygame.draw.rect(self.surface, col, r, 2 if active else 1)
+            self.draw_label(f"x{rate:g}", x + 8, y + 7, font=self.FONT_MONO_SM, color=col)
+            self._buttons.append((r, rate))
+            x += 78
+        col = self.COLOR_WARNING if snap['warp_limited'] else self.COLOR_ACCENT
+        self.draw_label(f"WARP x{snap['warp_req']:g} / achieved x{snap['warp']:.0f}", x + 16, y + 6,
+                        font=self.FONT_MONO_MD, color=col)
+        self.draw_label(f"EPOCH {snap['epoch']}", self.rect.width - 300, y - 2, font=self.FONT_MONO_MD)
+        self.draw_label(f"MET   {fmt_time(snap['t'])}", self.rect.width - 300, y + 18, font=self.FONT_MONO_MD,
+                        color=self.COLOR_TEXT_DIM)
 
-    def _draw_warp_controls(self) -> None:
-        self._button_rects.clear()
-        labels = ["◀◀", "◀", "▶", "▶▶", "▶▶▶"]
-        warp_vals = [1, 1, 1, 10, 100]  # placeholder mapping
-        x = 20
-        y = self.rect.height // 2 - 15
-        for i, label in enumerate(labels):
-            r = pygame.Rect(x, y, 44, 30)
-            pygame.draw.rect(self.surface, self.COLOR_BORDER, r, 1)
-            self.draw_label(label, x + 6, y + 6,
-                            font=self.FONT_MONO_SM, color=self.COLOR_TEXT)
-            self._button_rects.append(r)
-            x += 54
-
-        # Current warp rate display
-        self.api.time_warp = self.WARP_RATES[self._warp_index]
-        self.draw_label(f"TIME WARP: x{self.api.time_warp}", x + 10,
-                        self.rect.height // 2 - 8,
-                        font=self.FONT_MONO_MD, color=self.COLOR_ACCENT)
-
-    def _draw_epoch(self) -> None:
-        state = self.api.get_system_state()
-        epoch = state.get('epoch', '---')
-        self.draw_label(f"EPOCH: {epoch}",
-                        self.rect.width - 420,
-                        self.rect.height // 2 - 8,
-                        font=self.FONT_MONO_MD,
-                        color=self.COLOR_TEXT)
+    def step(self, direction: int):
+        rates = self.WARP_RATES
+        cur = self.snap['warp_req'] if self.snap else 1
+        i = min(range(len(rates)), key=lambda k: abs(rates[k] - cur))
+        self.app.set_warp(rates[max(0, min(len(rates) - 1, i + direction))])
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            lx = event.pos[0] - self.rect.x
-            ly = event.pos[1] - self.rect.y
-            for i, r in enumerate(self._button_rects):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.contains(event.pos):
+            lx, ly = self.local(event.pos)
+            for r, rate in self._buttons:
                 if r.collidepoint(lx, ly):
-                    if i <= 1:
-                        self._warp_index = max(0, self._warp_index - 1)
-                    else:
-                        self._warp_index = min(
-                            len(self.WARP_RATES) - 1,
-                            self._warp_index + 1
-                        )
+                    self.app.set_warp(rate)
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_PERIOD:
+                self.step(+1)
+            elif event.key == pygame.K_COMMA:
+                self.step(-1)

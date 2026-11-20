@@ -1,14 +1,8 @@
-from .solar_system import SolarSystem, BodyState
-from .spacecraft import Spacecraft, SpacecraftRotation
+# model/__init__.py
 from .api import SpaceflightSimAPI
+from .ephemeris import SolarSystem
+from .spacecraft import Spacecraft, ShipConfig
+from .kepler import Elements, rv_to_elements
 
-__all__ = [
-    'SolarSystem',
-    'BodyState',
-    'Spacecraft',
-    'SpacecraftRotation',
-    'SpaceflightSimAPI',
-    'ControlHook',
-    'RotationState',
-    'Quaternion'
-]
+__all__ = ['SpaceflightSimAPI', 'SolarSystem', 'Spacecraft', 'ShipConfig',
+           'Elements', 'rv_to_elements']

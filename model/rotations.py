@@ -1,126 +1,79 @@
-"""Rotation and attitude dynamics module for spacecraft simulation."""
+# model/rotations.py
+"""Quaternion helpers. Quaternions are numpy arrays [w, x, y, z] mapping body -> inertial."""
 
-from dataclasses import dataclass
-from typing import Tuple
-
-import astropy.units as u
 import numpy as np
 
 
-@dataclass
-class Quaternion:
-    """Unit quaternion for 3D rotations."""
-    w: float  # Scalar component
-    x: float  # Vector components
-    y: float
-    z: float
-
-    def __post_init__(self):
-        """Normalize the quaternion to ensure it's a unit quaternion."""
-        norm = np.sqrt(self.w ** 2 + self.x ** 2 + self.y ** 2 + self.z ** 2)
-        self.w /= norm
-        self.x /= norm
-        self.y /= norm
-        self.z /= norm
-
-    def conjugate(self) -> 'Quaternion':
-        """Return the conjugate of this quaternion."""
-        return Quaternion(self.w, -self.x, -self.y, -self.z)
+def q_normalize(q: np.ndarray) -> np.ndarray:
+    return q / np.linalg.norm(q)
 
 
-def multiply_quaternions(q1: Quaternion, q2: Quaternion) -> Quaternion:
-    """Multiply two quaternions."""
-    w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
-    x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y
-    y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x
-    z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w
-    return Quaternion(w, x, y, z)
+def q_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b
+    return np.array([w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                     w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                     w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                     w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2])
 
 
-class RotationState:
-    """Represents the rotational state of a rigid body."""
-
-    def __init__(self, orientation: Quaternion, angular_velocity: u.Quantity,
-                 inertia_tensor: np.ndarray,
-                 ):
-        """
-        Initialize rotation state.
-
-        Args:
-            orientation: Initial orientation as quaternion
-            angular_velocity: Initial angular velocity (rad/s)
-            inertia_tensor: 3x3 inertia tensor (kg·m²)
-        """
-        self.orientation = orientation
-        self.angular_velocity = angular_velocity.to(u.rad / u.s)
-        self.inertia_tensor = inertia_tensor
-
-    def propagate(self, time_step: u.s, torque: np.ndarray) -> None:
-        """
-        Propagate attitude dynamics forward in time with applied torque.
-
-        Args:
-            time_step: Time step for propagation (seconds)
-            torque: Applied torque in N·m (3-element array)
-        """
-        dt = time_step.to(u.s).value
-
-        # Convert angular velocity to rad/s for calculations
-        omega = self.angular_velocity.to(u.rad / u.s).value
-
-        # Euler's rotation equation: I*ω̇ + ω×(I*ω) = τ
-        omega_dot = np.dot(np.linalg.inv(self.inertia_tensor),
-                           torque - np.cross(omega, np.dot(self.inertia_tensor, omega)),
-                           )
-
-        # Update angular velocity (first-order integration)
-        new_omega = omega + omega_dot * dt
-
-        # Update orientation using quaternion kinematics
-        omega_norm = np.linalg.norm(new_omega)
-        if omega_norm > 1e-10:  # Avoid division by zero
-            axis = new_omega / omega_norm
-            angle = omega_norm * dt
-            q_delta = Quaternion(
-                    np.cos(angle / 2),
-                    axis[0] * np.sin(angle / 2),
-                    axis[1] * np.sin(angle / 2),
-                    axis[2] * np.sin(angle / 2),
-                    )
-            self.orientation = multiply_quaternions(q_delta, self.orientation)
-
-        # Update angular velocity (with units)
-        self.angular_velocity = new_omega * u.rad / u.s
-
-        # Renormalize quaternion to prevent drift
-        norm = np.sqrt(self.orientation.w ** 2 + self.orientation.x ** 2 +
-                       self.orientation.y ** 2 + self.orientation.z ** 2,
-                       )
-        self.orientation = Quaternion(
-                self.orientation.w / norm,
-                self.orientation.x / norm,
-                self.orientation.y / norm,
-                self.orientation.z / norm,
-                )
+def q_to_matrix(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = q
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                     [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                     [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
-def quaternion_to_euler(q: Quaternion) -> Tuple[float, float, float]:
-    """Convert quaternion to Euler angles (roll, pitch, yaw) in radians."""
-    # Roll (x-axis rotation)
-    sinr_cosp = 2 * (q.w * q.x + q.y * q.z)
-    cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y)
-    roll = np.arctan2(sinr_cosp, cosr_cosp)
+def q_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
+    n = np.linalg.norm(axis)
+    if n < 1e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0])
+    axis = axis / n
+    return np.concatenate([[np.cos(angle / 2)], axis * np.sin(angle / 2)])
 
-    # Pitch (y-axis rotation)
-    sinp = 2 * (q.w * q.y - q.z * q.x)
-    if abs(sinp) >= 1:
-        pitch = np.copysign(np.pi / 2, sinp)  # Use 90 degrees if out of range
+
+def q_integrate(q: np.ndarray, omega_body: np.ndarray, dt: float) -> np.ndarray:
+    """Exact integration for constant body rate over dt."""
+    wn = np.linalg.norm(omega_body)
+    if wn < 1e-12:
+        return q
+    return q_normalize(q_multiply(q, q_from_axis_angle(omega_body, wn * dt)))
+
+
+def q_from_forward(forward: np.ndarray, up_hint: np.ndarray = None) -> np.ndarray:
+    """Quaternion whose body +X axis points along `forward` (body +Z kept near up_hint)."""
+    f = forward / np.linalg.norm(forward)
+    up = np.array([0.0, 0.0, 1.0]) if up_hint is None else up_hint
+    if abs(np.dot(f, up / np.linalg.norm(up))) > 0.99:
+        up = np.array([0.0, 1.0, 0.0])
+    y = np.cross(up, f)
+    y /= np.linalg.norm(y)
+    z = np.cross(f, y)
+    m = np.column_stack([f, y, z])
+    return matrix_to_q(m)
+
+
+def matrix_to_q(m: np.ndarray) -> np.ndarray:
+    tr = np.trace(m)
+    if tr > 0:
+        s = 2 * np.sqrt(tr + 1)
+        q = [0.25 * s, (m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = 2 * np.sqrt(1 + m[0, 0] - m[1, 1] - m[2, 2])
+        q = [(m[2, 1] - m[1, 2]) / s, 0.25 * s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s]
+    elif m[1, 1] > m[2, 2]:
+        s = 2 * np.sqrt(1 + m[1, 1] - m[0, 0] - m[2, 2])
+        q = [(m[0, 2] - m[2, 0]) / s, (m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s]
     else:
-        pitch = np.arcsin(sinp)
+        s = 2 * np.sqrt(1 + m[2, 2] - m[0, 0] - m[1, 1])
+        q = [(m[1, 0] - m[0, 1]) / s, (m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s]
+    return q_normalize(np.array(q))
 
-    # Yaw (z-axis rotation)
-    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
-    yaw = np.arctan2(siny_cosp, cosy_cosp)
 
+def q_to_euler(q: np.ndarray):
+    """Roll, pitch, yaw (rad) of the body frame relative to the inertial frame."""
+    w, x, y, z = q
+    roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1, 1))
+    yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
     return roll, pitch, yaw
