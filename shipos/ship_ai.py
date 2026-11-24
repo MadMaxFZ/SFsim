@@ -29,6 +29,7 @@ ATTITUDE_MODES = ['OFF', 'KILLROT', 'PROGRADE', 'RETROGRADE', 'NORMAL', 'ANTINOR
                   'RADIAL_OUT', 'RADIAL_IN', 'TARGET', 'ANTITARGET', 'TGT_RETRO', 'VECTOR']
 ALIGN_TOL = np.radians(1.0)
 BURN_CUTOFF = 1e-4            # km/s (0.1 m/s)
+TCM_CUTOFF = 1e-6             # km/s (0.001 m/s)
 
 
 class ShipAI:
@@ -103,7 +104,7 @@ class ShipAI:
         from shipos.guidance import solve_tcm
         from model.dynamics import propagate_free
         name = self.name
-        if api.dominant(name) != 'Sun' or not self.target:
+        if api.dominant(name) != 'Sun' or self.target not in api.solar_system.soi or self.target == 'Sun':
             self.say("TCM: only available in heliocentric cruise with a target")
             return None
         sc = api.spacecraft[name]
@@ -113,8 +114,21 @@ class ShipAI:
                                      max_steps=1500, target=self.target)
             t_arrive = min(samples, key=lambda s: np.linalg.norm(
                 s[1] - solar.states(s[0])[self.target][0]))[0]
-        dv = solve_tcm(solar, sc.r, sc.v, api.t, self.target, t_arrive, pe_alt_km)
+        if not np.isfinite(t_arrive) or t_arrive <= api.t:
+            self.say("TCM: no future closest approach")
+            return None
+        dv = solve_tcm(solar, sc.r, sc.v, api.t, self.target, t_arrive, pe_alt_km,
+                       accel_kms2=sc.max_accel)
+        if dv is None or not np.all(np.isfinite(dv)):
+            self.say("TCM: could not verify an incoming periapsis")
+            return None
         mag = float(np.linalg.norm(dv))
+        if mag <= TCM_CUTOFF:
+            self.say("TCM: no burn needed")
+            return dv
+        if mag > sc.delta_v_remaining:
+            self.say("TCM: insufficient delta-v")
+            return None
         self.vector = dv / mag
         self.command_burn(mag, 'VECTOR', label='TCM')
         return dv
@@ -130,6 +144,8 @@ class ShipAI:
         p = self.program
         if not p:
             return None
+        if p['label'] == 'TCM' and p['state'] == 'ALIGN':
+            return 0.5  # bound the time between alignment and the first thrust step
         if p['state'] == 'BURN' and p['kind'] == 'BURN' and p['start_dv'] is not None:
             remaining = self._remaining(ship, ctx, p)
             return max(0.02, 0.5 * remaining / max(ship.max_accel, 1e-12))
@@ -216,7 +232,8 @@ class ShipAI:
                     self.say(f"{p['label']} ignition")
             if p['state'] == 'BURN':
                 remaining = self._remaining(ship, ctx, p)
-                if remaining <= BURN_CUTOFF or ship.propellant <= 0:
+                is_tcm = p['label'] == 'TCM'
+                if remaining <= (TCM_CUTOFF if is_tcm else BURN_CUTOFF) or ship.propellant <= 0:
                     ship.throttle = 0.0
                     self.say(f"{p['label']} complete, residual {remaining * 1000:+.1f} m/s")
                     self.program = None
@@ -224,7 +241,8 @@ class ShipAI:
                     self.pilot_throttle = 0.0
                     return
                 # ramp down over the last ~2 s of the burn
-                ship.throttle = float(np.clip(remaining / (2.0 * ship.max_accel), 0.02, 1.0))
+                ship.throttle = float(np.clip(remaining / (2.0 * ship.max_accel),
+                                              0.0 if is_tcm else 0.02, 1.0))
 
     def attitude(self, ship, ctx, dt, physical):
         if ship.status != 'FLIGHT':

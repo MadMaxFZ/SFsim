@@ -24,6 +24,8 @@ import numpy as np
 from astropy.time import Time
 
 from model.api import SpaceflightSimAPI
+from model.constants import gm, radius
+from model.kepler import rv_to_elements
 from shipos import ShipAI, Telemetry
 from shipos.guidance import plan_transfer
 
@@ -35,7 +37,7 @@ DAY = 86400.0
 def run(api, seconds, warp, dt=1 / 60):
     api.time_warp = warp
     t_end = api.t + seconds
-    while api.t < t_end:
+    while t_end - api.t > 1e-7:
         api.advance(min(dt, (t_end - api.t) / warp))
 
 
@@ -79,6 +81,8 @@ def main():
 
     # trajectory correction toward a 300 km Mars periapsis
     dv = ai.command_tcm(api, pe_alt_km=300.0)
+    if dv is None:
+        raise SystemExit("First TCM could not be verified")
     print(f"TCM solved: {np.linalg.norm(dv) * 1000:.1f} m/s")
     for _ in range(200):
         run(api, 60, 100, dt=1 / 60)
@@ -92,35 +96,42 @@ def main():
               f"periapsis alt {e['pe_alt_km']:.0f} km")
     else:
         c = tgt['closest']
-        print(f"No SOI encounter after TCM; closest {c['dist_km']:.3e} km")
-        return
+        raise SystemExit(f"No SOI encounter after TCM; closest {c['dist_km']:.3e} km")
 
     # cruise to ~30 days before the encounter, then a second, finer TCM
     run(api, (e['t'] - api.t) - 30 * DAY, 1e5, dt=0.1)
     dv = ai.command_tcm(api, pe_alt_km=300.0)
+    if dv is None:
+        raise SystemExit("Second TCM could not be verified")
     print(f"TCM-2 solved: {np.linalg.norm(dv) * 1000:.1f} m/s")
     for _ in range(200):
         run(api, 60, 100, dt=1 / 60)
         if ai.program is None:
             break
     tel._last_pred = -1e9
-    e = tel.update()['target']['encounter'] or e
+    e = tel.update()['target']['encounter']
+    if e is None:
+        raise SystemExit("No SOI encounter after second TCM")
     print(f"After TCM-2: predicted periapsis alt {e['pe_alt_km']:.0f} km")
 
     # cruise to Mars SOI, then capture into a low circular orbit
     while api.dominant("Explorer") != 'Mars':
-        run(api, DAY, 1e5, dt=0.1)
+        run(api, min(DAY, max(DAY / 24, e['t'] - api.t - DAY)), 1e5, dt=0.1)
         if api.t > e['t'] + 5 * DAY:
-            print("Missed Mars SOI")
-            return
-    print(f"Entered Mars SOI at {api.epoch.iso[:16]}")
-    ai.command_circularize('PE')
-    while ai.program is not None and api.spacecraft['Explorer'].status == 'FLIGHT':
-        run(api, 600, 100, dt=1 / 60)
-    run(api, 3600, 10)
+            raise SystemExit("Missed Mars SOI")
     c = api.context("Explorer")
+    incoming = rv_to_elements(c['r_rel'], c['v_rel'], gm('Mars')).periapsis - radius('Mars')
+    print(f"Entered Mars SOI at {api.epoch.iso[:16]}, incoming periapsis {incoming:.1f} km")
+    ai.command_circularize('PE')
+    deadline = api.t + 3 * DAY
+    while ai.program is not None and sc.status == 'FLIGHT' and api.t < deadline:
+        run(api, 600, 100, dt=1 / 60)
+    if ai.program is not None or sc.status != 'FLIGHT':
+        raise SystemExit("Mars capture burn did not complete")
+    run(api, 3600, 10)
     orb = tel.update()['ship']['orbit']
-    sc = api.spacecraft['Explorer']
+    if not (orb['body'] == 'Mars' and orb['bound'] and orb['pe_alt_km'] > 0):
+        raise SystemExit("Did not achieve a non-impacting Mars orbit")
     print(f"Final: {orb['body']} orbit Pe {orb['pe_alt_km']:.0f} km / Ap {orb['ap_alt_km']:.0f} km, "
           f"e {orb['e']:.4f}, status {sc.status}, dV used {sc.dv_expended * 1000:.0f} m/s, "
           f"remaining {sc.delta_v_remaining * 1000:.0f} m/s")
